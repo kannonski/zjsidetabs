@@ -116,6 +116,8 @@ struct State {
     names_hover: bool,
     /// Floating handle: width when not showing names.
     rest_width: usize,
+    /// Handle: blank lines between rows.
+    row_gap: usize,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -136,6 +138,7 @@ impl ZellijPlugin for State {
         self.anim_width = DEFAULT_FULL_WIDTH;
         self.dock_x = 4;
         self.rest_width = 14;
+        self.row_gap = 1;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -158,6 +161,11 @@ impl ZellijPlugin for State {
                     }
                 }
                 "header" => self.header = Some(v.clone()),
+                "row_gap" => {
+                    if let Ok(g) = v.parse::<usize>() {
+                        self.row_gap = g.min(3);
+                    }
+                }
                 "rest_width" => {
                     if let Ok(w) = v.parse::<usize>() {
                         self.rest_width = w.max(4);
@@ -712,6 +720,10 @@ impl State {
             let title = render::fit(&title, w.saturating_sub(2));
             lines.push(theme::render(&pad(&format!(" #[fg={}]{title}", p.dim))));
             map.push(Row::Header);
+            for _ in 0..self.row_gap {
+                lines.push(String::new());
+                map.push(Row::Blank);
+            }
         }
         for t in &self.tabs {
             let idx = t.position + 1;
@@ -767,6 +779,10 @@ impl State {
             };
             lines.push(theme::render(&pad(&line)));
             map.push(Row::Tab { pos: t.position });
+            for _ in 0..self.row_gap {
+                lines.push(String::new());
+                map.push(Row::Blank);
+            }
         }
         let mut out = String::new();
         for i in 0..rows {
