@@ -49,14 +49,44 @@ cp target/wasm32-wasip1/release/zjsidetabs.wasm ~/.config/zellij/plugins/
 
 ## Layout
 
+Two ways to mount the rail.
+
+**Floating dock (recommended).** A pinned overlay on the left edge: one column at rest, slides out on hover or on a keybind, never takes focus, and the terminal keeps its full width.
+
 ```kdl
 // ~/.config/zellij/layouts/sidetabs.kdl
+layout {
+    pane
+    floating_panes {
+        pane {
+            plugin location="file:~/.config/zellij/plugins/zjsidetabs.wasm" {
+                auto_rename     "true"
+                start_minimized "true"
+                width           "30"
+            }
+            x 0
+            y 0
+            width 1
+            height "100%"
+            pinned true
+            borderless true
+        }
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+}
+```
+
+**Tiled column.** A fixed sidebar that reserves its width. Minimize/expand isn't available in this mode — a layout `size` is a hard constraint and zellij refuses to resize it.
+
+```kdl
 layout {
     pane split_direction="vertical" {
         pane size=30 borderless=true {
             plugin location="file:~/.config/zellij/plugins/zjsidetabs.wasm" {
-                auto_expand "true"
                 auto_rename "true"
+                selectable  "true"
             }
         }
         pane
@@ -80,6 +110,8 @@ Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `
 | `hover_expand` | `true` | Minimized band expands on mouse-over, collapses when the mouse leaves |
 | `start_minimized` | `false` | Start as the 1-column band |
 | `zellij_bin` | `zellij` | Binary used for drag-reorder (`move-tab`) |
+| `width` | `30` | Expanded width of the floating dock, in columns |
+| `selectable` | `false` | Let the rail take keyboard focus (enables `j`/`k`, `/`, `r`). Off keeps a dock from stealing focus |
 | `color_accent` | `#cba6f7` | Active index, chevron, focused-pane dot |
 | `color_text` | `#cdd6f4` | Active / hovered label |
 | `color_subtext` | `#a6adc8` | Inactive label |

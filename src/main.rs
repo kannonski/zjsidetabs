@@ -8,6 +8,7 @@ mod theme;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use zellij_tile::prelude::*;
+use zellij_utils::input::layout::PercentOrFixed;
 
 use model::{Activity, Projection, Row};
 use render::{Ctx, Palette};
@@ -77,6 +78,12 @@ struct State {
     flash: HashMap<usize, u8>,
     bell_seen: HashSet<usize>,
     zellij_bin: String,
+    /// Running as a floating pane: geometry is set directly with
+    /// change_floating_panes_coordinates instead of stepping a tiled resize.
+    floating: bool,
+    /// Animation frontier for the floating width.
+    anim_width: usize,
+    selectable: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -93,6 +100,8 @@ impl ZellijPlugin for State {
         self.show_tree = true;
         self.hover_expand = true;
         self.zellij_bin = "zellij".into();
+        self.selectable = false;
+        self.anim_width = DEFAULT_FULL_WIDTH;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -105,6 +114,12 @@ impl ZellijPlugin for State {
                 "show_tree" => self.show_tree = on,
                 "hover_expand" => self.hover_expand = on,
                 "zellij_bin" => self.zellij_bin = v.clone(),
+                "selectable" | "keyboard" => self.selectable = on,
+                "width" => {
+                    if let Ok(w) = v.parse::<usize>() {
+                        self.full_width = w.max(MINI_COLS + 1);
+                    }
+                }
                 "start_minimized" if on => self.mode = Mode::Mini,
                 _ => {}
             }
@@ -123,9 +138,18 @@ impl ZellijPlugin for State {
             EventType::Timer,
             EventType::PermissionRequestResult,
         ]);
-        set_selectable(true);
+        // Non-selectable by default: the dock never steals focus, and zellij
+        // closes the tab when the last shell exits without our help.
+        set_selectable(self.selectable);
         self.plugin_id = get_plugin_ids().plugin_id;
-        self.full_width = DEFAULT_FULL_WIDTH;
+        if self.full_width == 0 {
+            self.full_width = DEFAULT_FULL_WIDTH;
+        }
+        self.anim_width = if self.mode == Mode::Mini {
+            1
+        } else {
+            self.full_width
+        };
     }
 
     fn update(&mut self, event: Event) -> bool {
@@ -144,6 +168,11 @@ impl ZellijPlugin for State {
             }
             Event::PaneUpdate(m) => {
                 self.panes = m.panes;
+                self.floating = self
+                    .panes
+                    .values()
+                    .flatten()
+                    .any(|p| p.is_plugin && p.id == self.plugin_id && p.is_floating);
                 self.close_if_orphaned();
                 self.maybe_rename();
                 true
@@ -173,6 +202,9 @@ impl ZellijPlugin for State {
     }
 
     fn pipe(&mut self, msg: PipeMessage) -> bool {
+        if matches!(msg.source, PipeSource::Cli(_)) {
+            unblock_cli_pipe_input(&msg.name);
+        }
         if msg.name == "zjsidetabs" {
             let target = match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
                 "toggle" => match self.mode {
@@ -394,6 +426,10 @@ impl State {
     /// re-renders after every resize, so this converges on its own — and
     /// the steps are the collapse animation.
     fn drive_resize(&mut self) {
+        if self.floating {
+            self.drive_floating();
+            return;
+        }
         let want_shrink = self.mode == Mode::Mini && self.cols > 1;
         let want_grow = self.mode == Mode::Full && self.cols < self.full_width;
         if !want_shrink && !want_grow {
@@ -417,6 +453,37 @@ impl State {
             },
             PaneId::Plugin(self.plugin_id),
         );
+    }
+
+    /// Floating dock: move the width toward the target a slice per frame.
+    /// Each call to change_floating_panes_coordinates triggers a re-render,
+    /// so this converges in a few frames and reads as a slide.
+    fn drive_floating(&mut self) {
+        let target = if self.mode == Mode::Mini {
+            1
+        } else {
+            self.full_width
+        };
+        if self.anim_width == target && self.cols == target {
+            return;
+        }
+        let step = (self.full_width / 4).max(4);
+        self.anim_width = if self.anim_width < target {
+            (self.anim_width + step).min(target)
+        } else {
+            self.anim_width.saturating_sub(step).max(target)
+        };
+        change_floating_panes_coordinates(vec![(
+            PaneId::Plugin(self.plugin_id),
+            FloatingPaneCoordinates {
+                x: Some(PercentOrFixed::Fixed(0)),
+                y: Some(PercentOrFixed::Fixed(0)),
+                width: Some(PercentOrFixed::Fixed(self.anim_width)),
+                height: Some(PercentOrFixed::Percent(100)),
+                pinned: Some(true),
+                borderless: Some(true),
+            },
+        )]);
     }
 
     /// The minimized band: one glyph per tab. Active in accent, bell in
