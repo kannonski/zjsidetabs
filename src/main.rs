@@ -769,14 +769,16 @@ impl State {
             } else {
                 String::new()
             };
-            let l1_left = format!(
-                "#[fg={c_icon}]{}  #[fg={c_main},bold]\u{2318}{idx}",
-                label.icon
-            );
+            // Icon sits on the middle line, vertically centred on the block:
+            //       ⌘2          3
+            //   󰆍   gitlab
+            //       ~/Project/gitlab
+            let l1_left = format!("    #[fg={c_main},bold]\u{2318}{idx}");
             let gap = inner.saturating_sub(theme::width(&l1_left) + theme::width(&count));
             let l1 = format!("{l1_left}{}{count}", " ".repeat(gap));
             let l2 = format!(
-                "    #[fg={c_main}]{}",
+                "#[fg={c_icon}]{}   #[fg={c_main}]{}",
+                label.icon,
                 render::fit(&label.text, inner.saturating_sub(4))
             );
             let l3 = format!(
