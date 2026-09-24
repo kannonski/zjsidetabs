@@ -314,15 +314,7 @@ impl ZellijPlugin for State {
                     }
                 }
                 if self.role == Role::Handle && self.floating {
-                    // keep animating: one more frame after the last mouse event
-                    let target = if self.names_pinned || self.names_hover {
-                        self.full_width
-                    } else {
-                        self.rest_width
-                    };
-                    if self.cols != target {
-                        self.arm(0.03);
-                    }
+                    self.handle_width_frame();
                 }
                 self.flash.retain(|_, n| {
                     *n -= 1;
@@ -421,8 +413,8 @@ impl ZellijPlugin for State {
             return;
         }
         if self.role == Role::Handle {
-            if self.floating {
-                self.drive_handle_width();
+            if self.floating && self.cols != self.handle_target_width() {
+                self.arm(0.016);
             }
             self.render_handle(rows, cols);
             return;
@@ -713,17 +705,25 @@ impl State {
 
     /// Floating handle: slide the pane's width toward rest_width or width,
     /// a slice per frame (each coordinate change re-renders us).
-    fn drive_handle_width(&mut self) {
-        let target = if self.names_pinned || self.names_hover {
+    fn handle_target_width(&self) -> usize {
+        if self.names_pinned || self.names_hover {
             self.full_width
         } else {
             self.rest_width
-        };
+        }
+    }
+
+    /// One eased frame toward the target width. Called from the timer so the
+    /// slide is paced (~60fps) instead of snapping in one re-render; each step
+    /// covers 40% of what's left, so it starts fast and settles gently.
+    fn handle_width_frame(&mut self) {
+        let target = self.handle_target_width();
         if self.cols == target {
             self.anim_width = target;
             return;
         }
-        let step = ((self.full_width.abs_diff(self.rest_width)) / 4).max(3);
+        let remaining = self.cols.abs_diff(target);
+        let step = ((remaining as f64) * 0.4).ceil().max(1.0) as usize;
         self.anim_width = if self.cols < target {
             (self.cols + step).min(target)
         } else {
@@ -794,7 +794,10 @@ impl State {
             let hovered = self.hover.is_some_and(
                 |h| matches!(map.get(h), Some(Row::Tab { pos }) if *pos == t.position),
             );
-            let (c_main, c_sub, c_icon) = if flashing {
+            let moving = self.floating && self.cols != self.handle_target_width();
+            let (c_main, c_sub, c_icon) = if moving {
+                (&p.dim, &p.dim, &p.dim)
+            } else if flashing {
                 (&p.warn, &p.warn, &p.warn)
             } else if t.active {
                 (&p.text, &p.subtext, &p.accent)
