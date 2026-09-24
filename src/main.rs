@@ -15,7 +15,7 @@ use render::{Ctx, Palette};
 
 const SPINNER_SECS: f64 = 0.2;
 /// How long the mouse must be gone before a hover-expanded rail collapses.
-const PEEK_SECS: f64 = 1.0;
+const PEEK_SECS: f64 = 0.5;
 /// Widths at or below this render as the minimized band.
 const MINI_COLS: usize = 3;
 const DEFAULT_FULL_WIDTH: usize = 30;
@@ -1049,11 +1049,17 @@ impl State {
         if self.role == Role::Handle {
             return match m {
                 Mouse::Hover(line, _) => {
+                    // The hover that opens the names view does not count as
+                    // "still here"; only movement after it does. Otherwise the
+                    // close needs two ticks instead of one.
                     if self.hover_expand && !self.names_hover {
                         self.names_hover = true;
+                        self.hover_seen = false;
+                        self.arm(PEEK_SECS);
+                    } else {
+                        self.hover_seen = true;
+                        self.arm(PEEK_SECS);
                     }
-                    self.hover_seen = true;
-                    self.arm(PEEK_SECS);
                     let h = usize::try_from(line)
                         .ok()
                         .filter(|i| matches!(self.rows.get(*i), Some(Row::Tab { .. })));
