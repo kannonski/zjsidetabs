@@ -258,16 +258,19 @@ impl ZellijPlugin for State {
 }
 
 impl State {
-    /// Panes in the tab this instance lives in, or None if we cannot find
-    /// ourselves (e.g. before the first PaneUpdate).
-    fn own_tab_panes(&self) -> Option<&Vec<PaneInfo>> {
+    /// (position, panes) of the tab this instance lives in, or None before
+    /// the first PaneUpdate that includes us.
+    fn own_tab(&self) -> Option<(usize, &Vec<PaneInfo>)> {
         self.panes
-            .values()
-            .find(|ps| ps.iter().any(|p| p.is_plugin && p.id == self.plugin_id))
+            .iter()
+            .find(|(_, ps)| ps.iter().any(|p| p.is_plugin && p.id == self.plugin_id))
+            .map(|(pos, ps)| (*pos, ps))
     }
 
+    /// zellij does not reap a tab whose last pane was a plugin closing
+    /// itself, so once our shells are gone we close the tab, not just us.
     fn close_if_orphaned(&mut self) {
-        let Some(panes) = self.own_tab_panes() else {
+        let Some((pos, panes)) = self.own_tab() else {
             return;
         };
         let terminals = panes
@@ -276,8 +279,14 @@ impl State {
             .count();
         if terminals > 0 {
             self.had_terminal = true;
-        } else if self.had_terminal {
-            close_self();
+            return;
+        }
+        if !self.had_terminal {
+            return;
+        }
+        match self.tabs.iter().find(|t| t.position == pos) {
+            Some(t) => close_tab_with_id(t.tab_id as u64),
+            None => close_self(),
         }
     }
 

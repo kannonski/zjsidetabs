@@ -117,18 +117,23 @@ pub struct Label {
     pub derived: bool,
 }
 
+/// Names that can only have come from zellij or from this plugin's own
+/// derivation — never from a person — and may therefore be overwritten.
+/// `exit`/`logout` are what a shell titles itself in its last moment; a tab
+/// carrying one was named by an earlier build and is stale.
 pub fn is_default_name(name: &str) -> bool {
-    name.starts_with("Tab #")
+    name.starts_with("Tab #") || matches!(name, "exit" | "logout" | "zsh" | "bash" | "fish" | "sh")
 }
 
 /// Label for a tab. Preference: user rename > focused pane's command >
 /// focused pane's title > zellij default.
 pub fn label(tab: &TabInfo, panes: &[PaneInfo]) -> Label {
+    let live = |p: &&PaneInfo| !p.is_plugin && p.is_selectable && !p.exited;
     let focused = panes
         .iter()
-        .filter(|p| !p.is_plugin && p.is_selectable)
+        .filter(live)
         .find(|p| p.is_focused)
-        .or_else(|| panes.iter().find(|p| !p.is_plugin && p.is_selectable));
+        .or_else(|| panes.iter().find(live));
     let icon = icons::for_command(focused.and_then(|p| p.terminal_command.as_deref()));
     if !is_default_name(&tab.name) {
         return Label {
@@ -137,50 +142,60 @@ pub fn label(tab: &TabInfo, panes: &[PaneInfo]) -> Label {
             derived: false,
         };
     }
-    let text = focused
-        .map(program_name)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| tab.name.clone());
-    Label {
-        icon,
-        text,
-        derived: true,
+    match focused.and_then(derived_label) {
+        Some(text) => Label {
+            icon,
+            text,
+            derived: true,
+        },
+        None => Label {
+            icon,
+            text: tab.name.clone(),
+            derived: false,
+        },
     }
 }
 
-/// Short human name for a pane: command basename; for a bare shell (no
-/// command reported) the cwd basename out of a `user@host:path` title, else
-/// the title itself.
-pub fn program_name(p: &PaneInfo) -> String {
+/// A name stable enough to write onto a tab: the command's basename, or for
+/// a bare shell the cwd out of a `user@host:path` title. Anything else — a
+/// transient title such as `exit`, a program's free-form title — yields
+/// None: display it, but never rename after it.
+pub fn derived_label(p: &PaneInfo) -> Option<String> {
     if let Some(cmd) = p.terminal_command.as_deref() {
         let mut parts = cmd.split_whitespace().filter(|s| !s.contains('='));
         if let Some(first) = parts.next() {
             let base = first.rsplit('/').next().unwrap_or(first);
             if matches!(base, "sudo" | "env" | "npx" | "uvx" | "bunx") {
                 if let Some(n) = parts.next() {
-                    return n.rsplit('/').next().unwrap_or(n).to_string();
+                    return Some(n.rsplit('/').next().unwrap_or(n).to_string());
                 }
             }
-            return base.to_string();
+            return Some(base.to_string());
         }
     }
     shell_label(&p.title)
 }
 
-/// `okkan@host:~/Project/gitlab` → `gitlab`; `~` → `~`; anything else as-is.
-pub fn shell_label(title: &str) -> String {
-    let path = match title.split_once(':') {
-        Some((who, path)) if who.contains('@') && !path.contains(' ') => path,
-        _ => return title.to_string(),
-    };
+/// Display name for a pane row: the derived label, else the raw title.
+pub fn program_name(p: &PaneInfo) -> String {
+    derived_label(p).unwrap_or_else(|| p.title.clone())
+}
+
+/// `okkan@host:~/Project/gitlab` → `gitlab`; `~` → `~`; `/` → `/`.
+/// None when the title is not in `user@host:path` form.
+pub fn shell_label(title: &str) -> Option<String> {
+    let (who, path) = title.split_once(':')?;
+    if !who.contains('@') || path.contains(' ') || path.is_empty() {
+        return None;
+    }
     if path == "/" || path == "~" {
-        return path.to_string();
+        return Some(path.to_string());
     }
-    let path = path.trim_end_matches('/');
-    if path.is_empty() {
-        return "/".to_string();
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Some("/".to_string());
     }
-    path.rsplit('/').next().unwrap_or(path).to_string()
+    Some(trimmed.rsplit('/').next().unwrap_or(trimmed).to_string())
 }
 
 pub struct Projection<'a> {
@@ -417,11 +432,38 @@ mod tests {
 
     #[test]
     fn shell_title_collapses_to_cwd_basename() {
-        assert_eq!(shell_label("okkan@okkan:~/Project/gitlab"), "gitlab");
-        assert_eq!(shell_label("okkan@okkan:~"), "~");
-        assert_eq!(shell_label("okkan@okkan:/"), "/");
-        assert_eq!(shell_label("nvim main.rs"), "nvim main.rs");
-        assert_eq!(shell_label("a@b: has space"), "a@b: has space");
+        assert_eq!(
+            shell_label("okkan@okkan:~/Project/gitlab").as_deref(),
+            Some("gitlab")
+        );
+        assert_eq!(shell_label("okkan@okkan:~").as_deref(), Some("~"));
+        assert_eq!(shell_label("okkan@okkan:/").as_deref(), Some("/"));
+        assert_eq!(shell_label("nvim main.rs"), None);
+        assert_eq!(shell_label("exit"), None);
+        assert_eq!(shell_label("a@b: has space"), None);
+    }
+
+    #[test]
+    fn transient_title_never_becomes_a_tab_name() {
+        let mut p = pane(1, "zsh", true);
+        p.terminal_command = None;
+        p.title = "exit".into();
+        let l = label(&tab(0, "Tab #1", true), &[p.clone()]);
+        assert!(
+            !l.derived,
+            "a bare `exit` title must not be written to the tab"
+        );
+        p.exited = true;
+        p.title = "okkan@h:~/x".into();
+        let l = label(&tab(0, "Tab #1", true), &[p]);
+        assert!(!l.derived, "an exited pane must not name the tab");
+    }
+
+    #[test]
+    fn stale_exit_name_is_reclaimable() {
+        assert!(is_default_name("exit"));
+        assert!(is_default_name("Tab #4"));
+        assert!(!is_default_name("infra"));
     }
 
     #[test]
