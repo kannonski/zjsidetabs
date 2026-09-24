@@ -18,6 +18,8 @@ pub struct Palette {
     pub surface_hi: String,
     pub warn: String,
     pub ok: String,
+    /// Sidebar title.
+    pub title: String,
 }
 
 impl Default for Palette {
@@ -32,6 +34,7 @@ impl Default for Palette {
             surface_hi: "#45475a".into(),
             warn: "#fab387".into(),
             ok: "#a6e3a1".into(),
+            title: "#b4befe".into(),
         }
     }
 }
@@ -48,6 +51,7 @@ impl Palette {
             "color_surface_hi" => &mut self.surface_hi,
             "color_warn" => &mut self.warn,
             "color_ok" => &mut self.ok,
+            "color_title" => &mut self.title,
             _ => return false,
         };
         *slot = v.to_string();

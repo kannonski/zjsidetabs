@@ -718,8 +718,20 @@ impl State {
                 .or_else(|| self.session.clone())
                 .unwrap_or_default();
             let title = render::fit(&title, w.saturating_sub(2));
-            lines.push(theme::render(&pad(&format!(" #[fg={}]{title}", p.dim))));
+            let left = w.saturating_sub(theme::width(&title)) / 2;
+            lines.push(theme::render(&pad(&format!(
+                "{}#[fg={},bold]{title}",
+                " ".repeat(left),
+                p.title
+            ))));
             map.push(Row::Header);
+            // hairline rule under the title, inset one cell each side
+            lines.push(theme::render(&format!(
+                " #[fg={}]{} ",
+                p.surface_hi,
+                "\u{2500}".repeat(w.saturating_sub(2))
+            )));
+            map.push(Row::Blank);
             for _ in 0..self.row_gap {
                 lines.push(String::new());
                 map.push(Row::Blank);
@@ -736,14 +748,14 @@ impl State {
             let flashing = self.flash.get(&t.position).is_some_and(|n| n % 2 == 0);
             let (bar, c_idx, c_aux, bold) = if flashing {
                 (
-                    format!("#[fg={}]\u{258c}", p.warn),
+                    format!("#[fg={}]\u{2588}", p.warn),
                     &p.warn,
                     &p.warn,
                     ",bold",
                 )
             } else if t.active {
                 (
-                    format!("#[bg={}]#[fg={}]\u{258c}", p.surface, p.accent),
+                    format!("#[bg={}]#[fg={}]\u{2588}", p.surface, p.accent),
                     &p.text,
                     &p.accent,
                     ",bold",
@@ -763,7 +775,7 @@ impl State {
                 String::new()
             };
             let head = format!(
-                "{bar}#[fg={c_aux}]{} #[fg={c_idx}{bold}]\u{2318}{idx}",
+                "{bar} #[fg={c_aux}]{}  #[fg={c_idx}{bold}]\u{2318}{idx}",
                 label.icon
             );
             let line = if names {
