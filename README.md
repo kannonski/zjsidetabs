@@ -99,15 +99,13 @@ Colours take `#rrggbb`, `#rgb` or a 0–255 palette index. Defaults are Catppucc
 keybinds {
     normal {
         bind "Alt b" {
-            MessagePlugin "file:~/.config/zellij/plugins/zjsidetabs.wasm" {
-                name "zjsidetabs"; payload "toggle";   // also: min | max
-            }
+            MessagePlugin { name "zjsidetabs"; payload "toggle"; }   // also: min | max
         }
     }
 }
 ```
 
-The message reaches every rail instance, so all tabs collapse together.
+Leave the plugin URL out. zellij matches a running plugin by URL **and** configuration; the rail is started from a layout with configuration, so a URL-targeted message never matches and launches a second instance. With no URL the message is broadcast to every running plugin — the rail answers, others ignore it — so all tabs collapse together.
 
 ## Feeding activity
 
