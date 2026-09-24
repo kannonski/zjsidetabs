@@ -767,29 +767,29 @@ impl State {
             } else {
                 (" ".into(), &p.subtext, &p.dim, "")
             };
-            // collapsed:  ▌󰄛 ⌘2 3        expanded:  ▌󰄛 ⌘2 gitlab      3
-            // pane count always dim, whatever the row state
+            // Two lines per tab, always, so hovering never shifts rows:
+            //   █ 󰆍  ⌘2        3      (icon · shortcut · dim pane count)
+            //   █     gitlab          (name; empty at rest)
             let count = if live > 1 {
                 format!("#[fg={}]{live}", p.dim)
             } else {
                 String::new()
             };
-            let head = format!(
+            let first_left = format!(
                 "{bar} #[fg={c_aux}]{}  #[fg={c_idx}{bold}]\u{2318}{idx}",
                 label.icon
             );
-            let line = if names {
-                let used = theme::width(&head) + 1 + theme::width(&count) + 1;
-                let name = render::fit(&label.text, w.saturating_sub(used));
-                let left = format!("{head} #[fg={c_idx}{bold}]{name}");
-                let gap = w.saturating_sub(theme::width(&left) + theme::width(&count) + 1);
-                format!("{left}{}{count} ", " ".repeat(gap))
-            } else if count.is_empty() {
-                head
+            let gap = w.saturating_sub(theme::width(&first_left) + theme::width(&count) + 1);
+            let first = format!("{first_left}{}{count} ", " ".repeat(gap));
+            let second = if names {
+                let name = render::fit(&label.text, w.saturating_sub(6));
+                format!("{bar}     #[fg={c_idx}{bold}]{name}")
             } else {
-                format!("{head} {count}")
+                bar.clone()
             };
-            lines.push(theme::render(&pad(&line)));
+            lines.push(theme::render(&pad(&first)));
+            map.push(Row::Tab { pos: t.position });
+            lines.push(theme::render(&pad(&second)));
             map.push(Row::Tab { pos: t.position });
             for _ in 0..self.row_gap {
                 lines.push(String::new());
