@@ -783,9 +783,7 @@ impl State {
                 "    #[fg={c_sub}]{}",
                 render::fit_tail(&detail, inner.saturating_sub(4))
             );
-            // The active entry is ONE rounded block over its three lines: caps
-            // on the top and bottom rows, the middle row filled edge to edge so
-            // the shape reads as a single tall pill.
+            // The active entry is one solid block over its three lines.
             let fill = |content: String, caps: bool| -> String {
                 let n = theme::width(&content);
                 let padding = " ".repeat(inner.saturating_sub(n));
@@ -799,7 +797,8 @@ impl State {
                 }
             };
             let rows3 = if t.active {
-                [fill(l1, true), fill(l2, false), fill(l3, true)]
+                // three plain filled rows read as one solid block
+                [fill(l1, false), fill(l2, false), fill(l3, false)]
             } else {
                 [format!(" {l1}"), format!(" {l2}"), format!(" {l3}")]
             };
