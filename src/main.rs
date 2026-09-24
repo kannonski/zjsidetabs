@@ -121,6 +121,9 @@ struct State {
     /// Clickable URLs: pane ids already given the highlight.
     linked_panes: HashSet<u32>,
     links: bool,
+    /// Rail launched as a jump palette: filter armed on open, Esc closes,
+    /// Enter jumps and closes.
+    palette: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -166,6 +169,7 @@ impl ZellijPlugin for State {
                 }
                 "header" => self.header = Some(v.clone()),
                 "links" | "clickable_links" => self.links = on,
+                "palette" => self.palette = on,
                 "row_gap" => {
                     if let Ok(g) = v.parse::<usize>() {
                         self.row_gap = g.min(3);
@@ -238,6 +242,9 @@ impl ZellijPlugin for State {
         } else {
             self.full_width
         };
+        if self.palette {
+            self.filter = Some(String::new());
+        }
         if self.role == Role::Dock {
             // The dock is always the full rail; visibility is the toggle. It is
             // launched at the handle's width and grows to `width` on screen.
@@ -1037,12 +1044,22 @@ impl State {
         }
         if let Some(q) = self.filter.as_mut() {
             match k.bare_key {
-                BareKey::Esc => self.filter = None,
+                BareKey::Esc => {
+                    if self.palette {
+                        close_self();
+                        return false;
+                    }
+                    self.filter = None
+                }
                 BareKey::Enter => {
                     let first = self.rows.iter().position(|r| matches!(r, Row::Tab { .. }));
                     self.filter = None;
                     if let Some(i) = first {
                         self.activate(i);
+                    }
+                    if self.palette {
+                        close_self();
+                        return false;
                     }
                 }
                 BareKey::Backspace => {
