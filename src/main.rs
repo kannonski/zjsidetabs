@@ -32,6 +32,8 @@ enum Role {
     Rail,
     Handle,
     Dock,
+    /// Renders nothing; reserves columns under a floating handle.
+    Spacer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -112,6 +114,8 @@ struct State {
     /// is the Cmd+B state; `names_hover` is transient while the mouse is over.
     names_pinned: bool,
     names_hover: bool,
+    /// Floating handle: width when not showing names.
+    rest_width: usize,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -131,6 +135,7 @@ impl ZellijPlugin for State {
         self.selectable = false;
         self.anim_width = DEFAULT_FULL_WIDTH;
         self.dock_x = 4;
+        self.rest_width = 14;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -148,10 +153,16 @@ impl ZellijPlugin for State {
                     self.role = match v.as_str() {
                         "handle" => Role::Handle,
                         "dock" => Role::Dock,
+                        "spacer" => Role::Spacer,
                         _ => Role::Rail,
                     }
                 }
                 "header" => self.header = Some(v.clone()),
+                "rest_width" => {
+                    if let Ok(w) = v.parse::<usize>() {
+                        self.rest_width = w.max(4);
+                    }
+                }
                 "dock_x" => {
                     if let Ok(x) = v.parse::<usize>() {
                         self.dock_x = x;
@@ -282,6 +293,17 @@ impl ZellijPlugin for State {
                         self.hover = None;
                     }
                 }
+                if self.role == Role::Handle && self.floating {
+                    // keep animating: one more frame after the last mouse event
+                    let target = if self.names_pinned || self.names_hover {
+                        self.full_width
+                    } else {
+                        self.rest_width
+                    };
+                    if self.cols != target {
+                        self.arm(0.03);
+                    }
+                }
                 self.flash.retain(|_, n| {
                     *n -= 1;
                     *n > 0
@@ -374,7 +396,14 @@ impl ZellijPlugin for State {
     fn render(&mut self, rows: usize, cols: usize) {
         self.cols = cols;
         self.height = rows;
+        if self.role == Role::Spacer {
+            print!("{}", "\n".repeat(rows.saturating_sub(1)));
+            return;
+        }
         if self.role == Role::Handle {
+            if self.floating {
+                self.drive_handle_width();
+            }
             self.render_handle(rows, cols);
             return;
         }
@@ -622,6 +651,37 @@ impl State {
                 } else {
                     0
                 })),
+                y: Some(PercentOrFixed::Fixed(0)),
+                width: Some(PercentOrFixed::Fixed(self.anim_width)),
+                height: Some(PercentOrFixed::Percent(100)),
+                pinned: Some(true),
+                borderless: Some(true),
+            },
+        )]);
+    }
+
+    /// Floating handle: slide the pane's width toward rest_width or width,
+    /// a slice per frame (each coordinate change re-renders us).
+    fn drive_handle_width(&mut self) {
+        let target = if self.names_pinned || self.names_hover {
+            self.full_width
+        } else {
+            self.rest_width
+        };
+        if self.cols == target {
+            self.anim_width = target;
+            return;
+        }
+        let step = ((self.full_width.abs_diff(self.rest_width)) / 4).max(3);
+        self.anim_width = if self.cols < target {
+            (self.cols + step).min(target)
+        } else {
+            self.cols.saturating_sub(step).max(target)
+        };
+        change_floating_panes_coordinates(vec![(
+            PaneId::Plugin(self.plugin_id),
+            FloatingPaneCoordinates {
+                x: Some(PercentOrFixed::Fixed(0)),
                 y: Some(PercentOrFixed::Fixed(0)),
                 width: Some(PercentOrFixed::Fixed(self.anim_width)),
                 height: Some(PercentOrFixed::Percent(100)),
