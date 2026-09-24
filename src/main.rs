@@ -13,6 +13,18 @@ use model::{Activity, Projection, Row};
 use render::{Ctx, Palette};
 
 const SPINNER_SECS: f64 = 0.2;
+/// How long the mouse must be gone before a hover-expanded rail collapses.
+const PEEK_SECS: f64 = 0.45;
+/// Widths at or below this render as the minimized band.
+const MINI_COLS: usize = 3;
+const DEFAULT_FULL_WIDTH: usize = 30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Mode {
+    #[default]
+    Full,
+    Mini,
+}
 
 #[derive(Default)]
 struct State {
@@ -38,6 +50,17 @@ struct State {
     cols: usize,
     height: usize,
     pal: Palette,
+    mode: Mode,
+    /// Expanded by hover rather than on purpose; collapses when the mouse leaves.
+    peek: bool,
+    hover_seen: bool,
+    hover_expand: bool,
+    /// Width to restore to. Follows the user's manual resizes while Full.
+    full_width: usize,
+    plugin_id: u32,
+    /// Cols at the last resize request; seeing them again means zellij
+    /// refused (min/max reached) and we stop asking.
+    resize_from: Option<usize>,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -52,6 +75,7 @@ impl ZellijPlugin for State {
         self.auto_rename = false;
         self.show_header = true;
         self.show_tree = true;
+        self.hover_expand = true;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -62,6 +86,8 @@ impl ZellijPlugin for State {
                 "auto_rename" => self.auto_rename = on,
                 "show_header" => self.show_header = on,
                 "show_tree" => self.show_tree = on,
+                "hover_expand" => self.hover_expand = on,
+                "start_minimized" if on => self.mode = Mode::Mini,
                 _ => {}
             }
         }
@@ -79,6 +105,8 @@ impl ZellijPlugin for State {
             EventType::PermissionRequestResult,
         ]);
         set_selectable(true);
+        self.plugin_id = get_plugin_ids().plugin_id;
+        self.full_width = DEFAULT_FULL_WIDTH;
     }
 
     fn update(&mut self, event: Event) -> bool {
@@ -104,6 +132,15 @@ impl ZellijPlugin for State {
             Event::Timer(_) => {
                 self.timer_armed = false;
                 self.spinner = self.spinner.wrapping_add(1);
+                if self.peek {
+                    if self.hover_seen {
+                        self.hover_seen = false;
+                        self.arm(PEEK_SECS);
+                    } else {
+                        self.peek = false;
+                        self.set_mode(Mode::Mini);
+                    }
+                }
                 true
             }
             _ => false,
@@ -111,6 +148,20 @@ impl ZellijPlugin for State {
     }
 
     fn pipe(&mut self, msg: PipeMessage) -> bool {
+        if msg.name == "zjsidetabs" {
+            let target = match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
+                "toggle" => match self.mode {
+                    Mode::Full => Mode::Mini,
+                    Mode::Mini => Mode::Full,
+                },
+                "min" | "minimize" | "collapse" | "hide" => Mode::Mini,
+                "max" | "expand" | "show" => Mode::Full,
+                _ => return false,
+            };
+            self.peek = false;
+            self.set_mode(target);
+            return true;
+        }
         if msg.name != "activity" {
             return false;
         }
@@ -134,6 +185,14 @@ impl ZellijPlugin for State {
     fn render(&mut self, rows: usize, cols: usize) {
         self.cols = cols;
         self.height = rows;
+        self.drive_resize();
+        if self.mode == Mode::Full && cols > MINI_COLS && self.resize_from.is_none() {
+            self.full_width = cols;
+        }
+        if cols <= MINI_COLS || self.mode == Mode::Mini {
+            self.render_mini(rows, cols);
+            return;
+        }
         let expanded = self.effective_expanded();
         let all = Projection {
             tabs: &self.tabs,
@@ -193,6 +252,88 @@ impl ZellijPlugin for State {
 }
 
 impl State {
+    fn arm(&mut self, secs: f64) {
+        if !self.timer_armed {
+            self.timer_armed = true;
+            set_timeout(secs);
+        }
+    }
+
+    fn set_mode(&mut self, m: Mode) {
+        if m == self.mode {
+            return;
+        }
+        self.mode = m;
+        self.cursor = None;
+        self.hover = None;
+        self.resize_from = None;
+    }
+
+    /// One resize step per render toward the current mode's width. zellij
+    /// re-renders after every resize, so this converges on its own — and
+    /// the steps are the collapse animation.
+    fn drive_resize(&mut self) {
+        let want_shrink = self.mode == Mode::Mini && self.cols > 1;
+        let want_grow = self.mode == Mode::Full && self.cols < self.full_width;
+        if !want_shrink && !want_grow {
+            self.resize_from = None;
+            return;
+        }
+        if self.resize_from == Some(self.cols) {
+            return;
+        }
+        self.resize_from = Some(self.cols);
+        let resize = if want_shrink {
+            Resize::Decrease
+        } else {
+            Resize::Increase
+        };
+        resize_pane_with_id(
+            ResizeStrategy {
+                resize,
+                direction: Some(Direction::Right),
+                invert_on_boundaries: false,
+            },
+            PaneId::Plugin(self.plugin_id),
+        );
+    }
+
+    /// The minimized band: one glyph per tab. Active in accent, bell in
+    /// warn, the rest dim. Rows map 1:1 so clicks still hit a tab.
+    fn render_mini(&mut self, rows: usize, cols: usize) {
+        let p = &self.pal;
+        let mut lines: Vec<String> = Vec::new();
+        let mut map: Vec<Row> = Vec::new();
+        if self.show_header {
+            lines.push(theme::render(&format!("#[fg={}]\u{2594}", p.dim)));
+            map.push(Row::Header);
+        }
+        for t in &self.tabs {
+            let g = if t.active {
+                format!("#[fg={}]\u{2588}", p.accent)
+            } else if t.has_bell_notification {
+                format!("#[fg={}]\u{25cf}", p.warn)
+            } else {
+                format!("#[fg={}]\u{25aa}", p.dim)
+            };
+            lines.push(theme::render(&g));
+            map.push(Row::Tab { pos: t.position });
+        }
+        let mut out = String::new();
+        for i in 0..rows {
+            let l = lines.get(i).cloned().unwrap_or_default();
+            out.push_str(&l);
+            for _ in theme::width(&l)..cols.max(1) {
+                out.push(' ');
+            }
+            if i + 1 < rows {
+                out.push('\n');
+            }
+        }
+        print!("{out}");
+        self.rows = map;
+    }
+
     fn effective_expanded(&self) -> HashSet<usize> {
         let mut e = self.expanded.clone();
         if self.auto_expand {
@@ -304,6 +445,9 @@ impl State {
     }
 
     fn key(&mut self, k: KeyWithModifier) -> bool {
+        // Typing into the rail means the user wants it: stop treating the
+        // expansion as a hover peek.
+        self.peek = false;
         if let Some(q) = self.filter.as_mut() {
             match k.bare_key {
                 BareKey::Esc => self.filter = None,
@@ -325,6 +469,7 @@ impl State {
             return true;
         }
         match k.bare_key {
+            BareKey::Char('b') | BareKey::Char('-') => self.set_mode(Mode::Mini),
             BareKey::Char('/') => self.filter = Some(String::new()),
             BareKey::Char('j') | BareKey::Down => self.move_cursor(true),
             BareKey::Char('k') | BareKey::Up => self.move_cursor(false),
@@ -374,6 +519,15 @@ impl State {
                 let Ok(i) = usize::try_from(line) else {
                     return false;
                 };
+                // A click pins a hover-peeked rail open.
+                self.peek = false;
+                if self.mode == Mode::Mini {
+                    if let Some(Row::Tab { pos }) = self.rows.get(i).cloned() {
+                        switch_tab_to(pos as u32 + 1);
+                    }
+                    self.set_mode(Mode::Full);
+                    return true;
+                }
                 let Some(row) = self.rows.get(i).cloned() else {
                     return false;
                 };
@@ -399,6 +553,16 @@ impl State {
                 false
             }
             Mouse::Hover(line, _) => {
+                if self.mode == Mode::Mini && self.hover_expand {
+                    self.set_mode(Mode::Full);
+                    self.peek = true;
+                    self.hover_seen = true;
+                    self.arm(PEEK_SECS);
+                    return true;
+                }
+                if self.peek {
+                    self.hover_seen = true;
+                }
                 let h = usize::try_from(line).ok().filter(|i| self.selectable(*i));
                 if h != self.hover {
                     self.hover = h;

@@ -22,6 +22,8 @@ A vertical, foldable tab rail for [zellij](https://zellij.dev). Tabs on the left
 - **Activity rows** — live sub-rows under a tab fed over `zellij pipe`, compatible with the [cfal/zellij-vertical-tabs](https://github.com/cfal/zellij-vertical-tabs) payload, so existing Claude Code hooks work unchanged. In-progress items get a spinner.
 - **Badges** — bell, fullscreen, synced input, folded pane count.
 - **Mouse** — click to switch/focus, hover highlight, scroll to move through tabs (or through the list when it overflows).
+- **Minimize** — collapse the whole rail to a 1-column band (one glyph per tab: active in accent, bell in orange) and back. The resize is stepped, so it animates. Trigger it from a keybind via `MessagePlugin` (below), with `b` / `-` in the rail, or by clicking the band.
+- **Hover to peek** — while minimized, mousing over the band expands the rail; moving away collapses it again ~half a second later. A click, a keypress, or the toggle pins it open. `hover_expand "false"` turns this off.
 - **Keyboard** (when the rail is focused) — `j`/`k` move, `Enter` activate, `l` unfold-or-activate, `h`/`Space` fold, `z` fold/unfold all, `g`/`G` first/last, `/` filter, `Esc` clear.
 
 ## Install
@@ -72,6 +74,8 @@ Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `
 | `auto_rename` | `false` | Rename default-named tabs to their running program |
 | `show_header` | `true` | Session name at the top |
 | `show_tree` | `true` | Show panes under unfolded tabs |
+| `hover_expand` | `true` | Minimized band expands on mouse-over, collapses when the mouse leaves |
+| `start_minimized` | `false` | Start as the 1-column band |
 | `color_accent` | `#cba6f7` | Active index, chevron, focused-pane dot |
 | `color_text` | `#cdd6f4` | Active / hovered label |
 | `color_subtext` | `#a6adc8` | Inactive label |
@@ -83,6 +87,23 @@ Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `
 | `color_ok` | `#a6e3a1` | Sync badge |
 
 Colours take `#rrggbb`, `#rgb` or a 0–255 palette index. Defaults are Catppuccin Mocha.
+
+## Toggling from a keybind
+
+```kdl
+// ~/.config/zellij/config.kdl
+keybinds {
+    normal {
+        bind "Alt b" {
+            MessagePlugin "file:~/.config/zellij/plugins/zjsidetabs.wasm" {
+                name "zjsidetabs"; payload "toggle";   // also: min | max
+            }
+        }
+    }
+}
+```
+
+The message reaches every rail instance, so all tabs collapse together.
 
 ## Feeding activity
 
