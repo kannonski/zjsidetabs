@@ -26,6 +26,7 @@ The rail is one fixed-width pane. Each row is a tab:
 
 Move the mouse over it and the rows switch to names — `󰅩 ⌘2 gitlab      3` — and switch back about a second after the mouse leaves. Right-click, or a `toggle` message (Cmd+B below), pins the names view. Nothing is launched or resized, so nothing flickers.
 
+- **Clickable links in every pane** — the rail registers a URL highlight on each terminal pane in its tab: zellij underlines `http(s)://…` and **Alt+click** opens it with the system opener. Works under mouse reporting, where the terminal's own Cmd+click gets swallowed. `links "false"` turns it off.
 - **Icons per program** — Nerd Font glyph picked from the pane's command (nvim, git, docker, node, cargo, claude, k8s, ssh, …), seeing through `sudo`/`env`/`npx`.
 - **Meaningful names** — a tab you haven't named shows its program, or the cwd for a plain shell, and follows changes until you rename it yourself.
 - **Click** a row to switch. **Scroll** over the rail to step through tabs. A tab whose pane rings a bell pulses orange.
@@ -106,6 +107,9 @@ Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij shows a y/
 | `show_tree` | `true` | Show panes under unfolded tabs |
 | `role` | `rail` | `rail` (full sidebar) or `handle` (strip with hover names) |
 | `hover_expand` | `true` | Handle: show names while the mouse is over the rail |
+| `links` | `true` | Underline URLs in panes and open them on Alt+click |
+| `rest_width` | `14` | Floating handle: width at rest (expands to `width` on hover) |
+| `row_gap` | `1` | Handle: blank lines between entries |
 | `start_minimized` | `false` | Start as the 1-column band |
 | `zellij_bin` | `zellij` | Binary used for drag-reorder (`move-tab`) |
 | `width` | `30` | Expanded width of the floating dock, in columns |
