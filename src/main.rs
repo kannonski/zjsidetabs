@@ -61,6 +61,11 @@ struct State {
     /// Cols at the last resize request; seeing them again means zellij
     /// refused (min/max reached) and we stop asking.
     resize_from: Option<usize>,
+    /// Set once a terminal pane has been seen next to us in our own tab.
+    /// Because this pane is selectable, zellij will not close the tab when
+    /// the last shell exits; when that happens we close ourselves so the
+    /// tab goes with us, like the built-in bars do.
+    had_terminal: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -124,6 +129,7 @@ impl ZellijPlugin for State {
             }
             Event::PaneUpdate(m) => {
                 self.panes = m.panes;
+                self.close_if_orphaned();
                 self.maybe_rename();
                 true
             }
@@ -252,6 +258,29 @@ impl ZellijPlugin for State {
 }
 
 impl State {
+    /// Panes in the tab this instance lives in, or None if we cannot find
+    /// ourselves (e.g. before the first PaneUpdate).
+    fn own_tab_panes(&self) -> Option<&Vec<PaneInfo>> {
+        self.panes
+            .values()
+            .find(|ps| ps.iter().any(|p| p.is_plugin && p.id == self.plugin_id))
+    }
+
+    fn close_if_orphaned(&mut self) {
+        let Some(panes) = self.own_tab_panes() else {
+            return;
+        };
+        let terminals = panes
+            .iter()
+            .filter(|p| !p.is_plugin && !p.is_suppressed)
+            .count();
+        if terminals > 0 {
+            self.had_terminal = true;
+        } else if self.had_terminal {
+            close_self();
+        }
+    }
+
     fn arm(&mut self, secs: f64) {
         if !self.timer_armed {
             self.timer_armed = true;

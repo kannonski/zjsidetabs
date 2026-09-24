@@ -215,7 +215,9 @@ impl<'a> Ctx<'a> {
         let icon = crate::icons::for_command(pane.terminal_command.as_deref());
         let name = model::program_name(pane);
         let focused = pane.is_focused && tab_active;
-        let (c, dot) = if focused {
+        let (c, dot) = if pane.exited {
+            (&p.dim, format!(" #[fg={}]\u{2717}", p.warn))
+        } else if focused {
             (&p.text, format!(" #[fg={}]\u{25cf}", p.accent))
         } else if self.hover == Some(idx) {
             (&p.text, String::new())
@@ -224,7 +226,8 @@ impl<'a> Ctx<'a> {
         };
         let w = self.inner();
         let head = format!("    #[fg={}]{branch} #[fg={c}]{icon} ", p.dim);
-        let room = w.saturating_sub(theme::width(&head) + if focused { 2 } else { 0 });
+        let room =
+            w.saturating_sub(theme::width(&head) + if focused || pane.exited { 2 } else { 0 });
         let content = pad(&format!("{head}#[fg={c}]{}{dot}", fit(&name, room)), w);
         self.frame(&content, false, idx)
     }
