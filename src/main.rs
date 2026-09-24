@@ -118,6 +118,9 @@ struct State {
     rest_width: usize,
     /// Handle: blank lines between rows.
     row_gap: usize,
+    /// Clickable URLs: pane ids already given the highlight.
+    linked_panes: HashSet<u32>,
+    links: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -139,6 +142,7 @@ impl ZellijPlugin for State {
         self.dock_x = 4;
         self.rest_width = 14;
         self.row_gap = 1;
+        self.links = true;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -161,6 +165,7 @@ impl ZellijPlugin for State {
                     }
                 }
                 "header" => self.header = Some(v.clone()),
+                "links" | "clickable_links" => self.links = on,
                 "row_gap" => {
                     if let Ok(g) = v.parse::<usize>() {
                         self.row_gap = g.min(3);
@@ -243,7 +248,7 @@ impl ZellijPlugin for State {
             self.hover_seen = true;
             self.arm(PEEK_SECS);
         }
-        subscribe(&[EventType::Visible]);
+        subscribe(&[EventType::Visible, EventType::HighlightClicked]);
     }
 
     fn update(&mut self, event: Event) -> bool {
@@ -260,8 +265,15 @@ impl ZellijPlugin for State {
                 self.maybe_rename();
                 true
             }
+            Event::HighlightClicked { matched_string, .. } => {
+                // zellij underlines URLs for us and reports Alt+click on one
+                let url = matched_string.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+                run_command(&["open", url], BTreeMap::new());
+                false
+            }
             Event::PaneUpdate(m) => {
                 self.panes = m.panes;
+                self.link_new_panes();
                 self.floating = self
                     .panes
                     .values()
@@ -490,6 +502,37 @@ impl ZellijPlugin for State {
 }
 
 impl State {
+    /// Register the URL highlight on every terminal pane in our tab that
+    /// doesn't have it yet. One writer per tab: the handle/rail, not the
+    /// spacer.
+    fn link_new_panes(&mut self) {
+        if !self.links || self.role == Role::Spacer {
+            return;
+        }
+        let Some((_, panes)) = self.own_tab().map(|(p, ps)| (p, ps.clone())) else {
+            return;
+        };
+        for pane in panes.iter().filter(|p| !p.is_plugin) {
+            if !self.linked_panes.insert(pane.id) {
+                continue;
+            }
+            set_pane_regex_highlights(
+                PaneId::Terminal(pane.id),
+                vec![RegexHighlight {
+                    pattern: r#"https?://[^\s<>"'`)\]]+"#.to_string(),
+                    style: HighlightStyle::None,
+                    layer: HighlightLayer::Hint,
+                    context: BTreeMap::new(),
+                    on_hover: false,
+                    bold: false,
+                    italic: false,
+                    underline: true,
+                    tooltip_text: Some("open link".to_string()),
+                }],
+            );
+        }
+    }
+
     /// (position, panes) of the tab this instance lives in, or None before
     /// the first PaneUpdate that includes us.
     fn own_tab(&self) -> Option<(usize, &Vec<PaneInfo>)> {
