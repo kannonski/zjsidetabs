@@ -398,26 +398,28 @@ impl State {
         }
     }
 
-    /// Give default-named tabs a name from what runs in them. Only touches
-    /// names zellij generated or that this plugin wrote earlier.
+    /// Give a default-named tab a name from what runs in it. Only this
+    /// instance's own tab: one rail per tab means one writer per name, so
+    /// instances never fight and a stale build in another tab cannot
+    /// rewrite this one.
     fn maybe_rename(&mut self) {
         if !self.auto_rename {
             return;
         }
-        for tab in &self.tabs {
-            let ours = self
-                .our_names
-                .get(&tab.position)
-                .is_some_and(|n| *n == tab.name);
-            if !model::is_default_name(&tab.name) && !ours {
-                continue;
-            }
-            let panes = self.panes.get(&tab.position).cloned().unwrap_or_default();
-            let l = model::label(tab, &panes);
-            if l.derived && !model::is_default_name(&l.text) && l.text != tab.name {
-                rename_tab_with_id(tab.tab_id as u64, &l.text);
-                self.our_names.insert(tab.position, l.text);
-            }
+        let Some((pos, panes)) = self.own_tab().map(|(p, ps)| (p, ps.clone())) else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|t| t.position == pos) else {
+            return;
+        };
+        let ours = self.our_names.get(&pos).is_some_and(|n| *n == tab.name);
+        if !model::is_default_name(&tab.name) && !ours {
+            return;
+        }
+        let l = model::label(tab, &panes);
+        if l.derived && !model::is_default_name(&l.text) && l.text != tab.name {
+            rename_tab_with_id(tab.tab_id as u64, &l.text);
+            self.our_names.insert(pos, l.text);
         }
     }
 
