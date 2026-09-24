@@ -176,6 +176,28 @@ pub fn derived_label(p: &PaneInfo) -> Option<String> {
     shell_label(&p.title)
 }
 
+/// Full path out of a `user@host:path` shell title (`~/Project/gitlab`).
+pub fn shell_path(title: &str) -> Option<String> {
+    let (who, path) = title.split_once(':')?;
+    if !who.contains('@') || path.is_empty() || path.contains(' ') {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+/// What the focused pane is about: its cwd for a shell, else its label.
+pub fn detail(tab: &TabInfo, panes: &[PaneInfo]) -> String {
+    let live = |p: &&PaneInfo| !p.is_plugin && p.is_selectable && !p.exited;
+    let focused = panes
+        .iter()
+        .filter(live)
+        .find(|p| p.is_focused)
+        .or_else(|| panes.iter().find(live));
+    focused
+        .and_then(|p| shell_path(&p.title))
+        .unwrap_or_else(|| label(tab, panes).text)
+}
+
 /// Display name for a pane row: the derived label, else the raw title.
 pub fn program_name(p: &PaneInfo) -> String {
     derived_label(p).unwrap_or_else(|| p.title.clone())

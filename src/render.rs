@@ -96,6 +96,20 @@ pub fn fit(s: &str, w: usize) -> String {
     out
 }
 
+/// Fit keeping the tail: `~/Project/gitlab` → `…ject/gitlab`. Paths read
+/// better cut at the front.
+pub fn fit_tail(s: &str, w: usize) -> String {
+    let n = s.chars().count();
+    if n <= w {
+        return s.to_string();
+    }
+    if w == 0 {
+        return String::new();
+    }
+    let keep: String = s.chars().skip(n - (w - 1)).collect();
+    format!("\u{2026}{keep}")
+}
+
 fn pad(s: &str, w: usize) -> String {
     let n = theme::width(s);
     if n >= w {

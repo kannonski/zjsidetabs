@@ -783,12 +783,12 @@ impl State {
             );
             let gap = w.saturating_sub(theme::width(&first_left) + theme::width(&count) + 1);
             let first = format!("{first_left}{}{count} ", " ".repeat(gap));
-            let second = if names {
-                let name = render::fit(&label.text, w.saturating_sub(6));
-                format!("{bar}     #[fg={c_idx}{bold}]{name}")
-            } else {
-                bar.clone()
-            };
+            // second line: the pane's path (or name) always; hover widens the
+            // rail so more of it shows
+            let detail = model::detail(t, &panes);
+            let shown = render::fit_tail(&detail, w.saturating_sub(6));
+            let c_detail = if t.active { &p.subtext } else { &p.dim };
+            let second = format!("{bar}     #[fg={c_detail}]{shown}");
             lines.push(theme::render(&pad(&first)));
             map.push(Row::Tab { pos: t.position });
             lines.push(theme::render(&pad(&second)));
