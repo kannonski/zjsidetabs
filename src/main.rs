@@ -703,7 +703,9 @@ impl State {
     /// number. Hovering it summons the dock.
     fn render_handle(&mut self, rows: usize, cols: usize) {
         let p = &self.pal;
-        let w = cols.max(1);
+        // last column is a vertical rule separating the rail from the terminal
+        let border = theme::render(&format!("#[fg={}]\u{2502}", p.surface_hi));
+        let w = cols.max(2) - 1;
         let names = self.names_pinned || self.names_hover;
         let mut lines: Vec<String> = Vec::new();
         let mut map: Vec<Row> = Vec::new();
@@ -728,7 +730,7 @@ impl State {
             // hairline rule under the title, inset one cell each side
             lines.push(theme::render(&format!(
                 " #[fg={}]{} ",
-                p.surface_hi,
+                p.muted,
                 "\u{2500}".repeat(w.saturating_sub(2))
             )));
             map.push(Row::Blank);
@@ -803,6 +805,7 @@ impl State {
             for _ in theme::width(&l)..w {
                 out.push(' ');
             }
+            out.push_str(&border);
             if i + 1 < rows {
                 out.push('\n');
             }
