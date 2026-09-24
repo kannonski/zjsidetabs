@@ -177,10 +177,15 @@ impl ZellijPlugin for State {
             }
         }
         self.dock_cfg.insert("role".into(), "dock".into());
+        self.dock_cfg
+            .insert("dock_x".into(), self.dock_x.to_string());
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
             PermissionType::RunCommands,
+            // pipe_message_to_plugin (handle → dock) and unblock_cli_pipe_input
+            PermissionType::MessageAndLaunchOtherPlugins,
+            PermissionType::ReadCliPipes,
         ]);
         subscribe(&[
             EventType::TabUpdate,
@@ -204,8 +209,10 @@ impl ZellijPlugin for State {
             self.full_width
         };
         if self.role == Role::Dock {
-            // The dock is always the full rail; visibility is the toggle.
+            // The dock is always the full rail; visibility is the toggle. It is
+            // launched at the handle's width and grows to `width` on screen.
             self.mode = Mode::Full;
+            self.anim_width = self.dock_x;
         }
         subscribe(&[EventType::Visible]);
     }
@@ -362,7 +369,9 @@ impl ZellijPlugin for State {
             self.render_handle(rows, cols);
             return;
         }
-        if self.role != Role::Dock {
+        if self.role == Role::Dock {
+            self.drive_floating();
+        } else {
             self.drive_resize();
         }
         if self.mode == Mode::Full && cols > MINI_COLS && self.resize_from.is_none() {
@@ -619,7 +628,7 @@ impl State {
             .with_floating_pane_coordinates(FloatingPaneCoordinates {
                 x: Some(PercentOrFixed::Fixed(0)),
                 y: Some(PercentOrFixed::Fixed(0)),
-                width: Some(PercentOrFixed::Fixed(self.full_width)),
+                width: Some(PercentOrFixed::Fixed(self.cols.max(1))),
                 height: Some(PercentOrFixed::Percent(100)),
                 pinned: Some(true),
                 borderless: Some(true),
@@ -635,43 +644,55 @@ impl State {
         let w = cols.max(1);
         let mut lines: Vec<String> = Vec::new();
         let mut map: Vec<Row> = Vec::new();
-        let centre = |txt: &str| -> String {
-            let n = txt.chars().count();
-            let left = w.saturating_sub(n) / 2;
-            format!(
-                "{}{}{}",
-                " ".repeat(left),
-                txt,
-                " ".repeat(w.saturating_sub(n + left))
-            )
+        let pad = |txt: &str| -> String {
+            let n = theme::width(txt);
+            format!("{txt}{}", " ".repeat(w.saturating_sub(n)))
         };
         if self.show_header {
-            lines.push(theme::render(&format!(
-                "#[fg={}]{}",
-                p.dim,
-                centre("\u{2261}")
-            )));
+            lines.push(theme::render(&pad(&format!(" #[fg={}]\u{2261}", p.dim))));
             map.push(Row::Header);
         }
         for t in &self.tabs {
-            let idx = (t.position + 1).to_string();
+            let idx = t.position + 1;
+            let panes = self
+                .panes
+                .get(&t.position)
+                .map(|ps| {
+                    ps.iter()
+                        .filter(|p| !p.is_plugin && p.is_selectable && !p.is_suppressed)
+                        .count()
+                })
+                .unwrap_or(0);
             let flashing = self.flash.get(&t.position).is_some_and(|n| n % 2 == 0);
-            let line = if flashing {
-                format!("#[fg={},bold]{}", p.warn, centre(&idx))
+            // "▌ 2  3": accent bar (active) · tab number · pane count, dimmer
+            let (bar, c_idx, c_cnt, bold) = if flashing {
+                (
+                    format!("#[fg={}]\u{258c}", p.warn),
+                    &p.warn,
+                    &p.warn,
+                    ",bold",
+                )
             } else if t.active {
-                let body: String = centre(&idx).chars().skip(1).collect();
-                format!(
-                    "#[bg={}]#[fg={}]\u{258c}#[fg={},bold]{}",
-                    p.surface, p.accent, p.text, body
+                (
+                    format!("#[bg={}]#[fg={}]\u{258c}", p.surface, p.accent),
+                    &p.text,
+                    &p.accent,
+                    ",bold",
                 )
             } else if t.has_bell_notification {
-                format!("#[fg={}]{}", p.warn, centre(&idx))
+                (" ".into(), &p.warn, &p.warn, "")
             } else if self.hover == Some(map.len()) {
-                format!("#[fg={}]{}", p.text, centre(&idx))
+                (" ".into(), &p.text, &p.subtext, "")
             } else {
-                format!("#[fg={}]{}", p.subtext, centre(&idx))
+                (" ".into(), &p.subtext, &p.dim, "")
             };
-            lines.push(theme::render(&line));
+            let count = if panes > 1 {
+                format!("#[fg={c_cnt}]{panes}")
+            } else {
+                String::new()
+            };
+            let line = format!("{bar}#[fg={c_idx}{bold}]{idx:>2} {count}");
+            lines.push(theme::render(&pad(&line)));
             map.push(Row::Tab { pos: t.position });
         }
         let mut out = String::new();
