@@ -22,6 +22,18 @@ const DEFAULT_FULL_WIDTH: usize = 30;
 /// Timer ticks a bell flash lasts (at SPINNER_SECS each).
 const FLASH_TICKS: u8 = 6;
 
+/// How this instance is mounted. `Rail` is the single-pane form (tiled or
+/// floating). `Handle` + `Dock` are a pair: a thin tiled strip that reserves
+/// its columns and shows tab numbers, and a floating full rail that the
+/// handle summons on hover and that hides itself when the mouse leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Role {
+    #[default]
+    Rail,
+    Handle,
+    Dock,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Mode {
     #[default]
@@ -84,6 +96,15 @@ struct State {
     /// Animation frontier for the floating width.
     anim_width: usize,
     selectable: bool,
+    role: Role,
+    /// Header text override; None shows the session name.
+    header: Option<String>,
+    /// Dock: column where the dock is placed (= handle width).
+    dock_x: usize,
+    /// Dock: currently suppressed.
+    hidden: bool,
+    /// Dock: hide_self() issued once, on first render (the pane must exist).
+    dock_initialised: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -102,6 +123,7 @@ impl ZellijPlugin for State {
         self.zellij_bin = "zellij".into();
         self.selectable = false;
         self.anim_width = DEFAULT_FULL_WIDTH;
+        self.dock_x = 4;
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -115,6 +137,19 @@ impl ZellijPlugin for State {
                 "hover_expand" => self.hover_expand = on,
                 "zellij_bin" => self.zellij_bin = v.clone(),
                 "selectable" | "keyboard" => self.selectable = on,
+                "role" => {
+                    self.role = match v.as_str() {
+                        "handle" => Role::Handle,
+                        "dock" => Role::Dock,
+                        _ => Role::Rail,
+                    }
+                }
+                "header" => self.header = Some(v.clone()),
+                "dock_x" => {
+                    if let Ok(x) = v.parse::<usize>() {
+                        self.dock_x = x;
+                    }
+                }
                 "width" => {
                     if let Ok(w) = v.parse::<usize>() {
                         self.full_width = w.max(MINI_COLS + 1);
@@ -150,6 +185,11 @@ impl ZellijPlugin for State {
         } else {
             self.full_width
         };
+        if self.role == Role::Dock {
+            // The dock is always the full rail; visibility is the toggle.
+            self.mode = Mode::Full;
+        }
+        subscribe(&[EventType::Visible]);
     }
 
     fn update(&mut self, event: Event) -> bool {
@@ -179,9 +219,20 @@ impl ZellijPlugin for State {
             }
             Event::Key(k) => self.key(k),
             Event::Mouse(m) => self.mouse(m),
+            Event::Visible(v) => {
+                if self.role == Role::Dock {
+                    self.hidden = !v;
+                }
+                false
+            }
             Event::Timer(_) => {
                 self.timer_armed = false;
                 self.spinner = self.spinner.wrapping_add(1);
+                if self.role == Role::Dock && self.peek && !self.hover_seen {
+                    self.peek = false;
+                    self.dock_hide();
+                    return true;
+                }
                 self.flash.retain(|_, n| {
                     *n -= 1;
                     *n > 0
@@ -204,6 +255,37 @@ impl ZellijPlugin for State {
     fn pipe(&mut self, msg: PipeMessage) -> bool {
         if matches!(msg.source, PipeSource::Cli(_)) {
             unblock_cli_pipe_input(&msg.name);
+        }
+        if msg.name == "zjsidetabs" && self.role != Role::Rail {
+            // The handle ignores rail control; the dock is what gets shown.
+            if self.role == Role::Dock {
+                match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
+                    "peek" => {
+                        if self.hidden {
+                            self.dock_show();
+                        }
+                        self.peek = true;
+                        self.hover_seen = true;
+                        self.arm(PEEK_SECS);
+                    }
+                    "toggle" => {
+                        if self.hidden {
+                            self.peek = false;
+                            self.dock_show();
+                        } else {
+                            self.dock_hide();
+                        }
+                    }
+                    "show" | "max" | "expand" => {
+                        self.peek = false;
+                        self.dock_show();
+                    }
+                    "hide" | "min" | "collapse" => self.dock_hide(),
+                    _ => return false,
+                }
+                return true;
+            }
+            return false;
         }
         if msg.name == "zjsidetabs" {
             let target = match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
@@ -242,7 +324,19 @@ impl ZellijPlugin for State {
     fn render(&mut self, rows: usize, cols: usize) {
         self.cols = cols;
         self.height = rows;
-        self.drive_resize();
+        if self.role == Role::Handle {
+            self.render_handle(rows, cols);
+            return;
+        }
+        if self.role == Role::Dock {
+            if !self.dock_initialised {
+                self.dock_initialised = true;
+                self.dock_hide();
+                return;
+            }
+        } else {
+            self.drive_resize();
+        }
         if self.mode == Mode::Full && cols > MINI_COLS && self.resize_from.is_none() {
             self.full_width = cols;
         }
@@ -286,6 +380,7 @@ impl ZellijPlugin for State {
             hover: self.hover,
             spinner: self.spinner,
             rename: self.rename.as_ref().map(|(p, b)| (*p, b.as_str())),
+            header: self.header.as_deref(),
             flash: &self.flash,
             pal: &self.pal,
         };
@@ -484,6 +579,94 @@ impl State {
                 borderless: Some(true),
             },
         )]);
+    }
+
+    fn dock_show(&mut self) {
+        change_floating_panes_coordinates(vec![(
+            PaneId::Plugin(self.plugin_id),
+            FloatingPaneCoordinates {
+                x: Some(PercentOrFixed::Fixed(self.dock_x)),
+                y: Some(PercentOrFixed::Fixed(0)),
+                width: Some(PercentOrFixed::Fixed(self.full_width)),
+                height: Some(PercentOrFixed::Percent(100)),
+                pinned: Some(true),
+                borderless: Some(true),
+            },
+        )]);
+        show_self(true);
+        self.hidden = false;
+    }
+
+    fn dock_hide(&mut self) {
+        hide_self();
+        self.hidden = true;
+        self.peek = false;
+        self.hover = None;
+    }
+
+    /// The handle: a thin tiled strip with one row per tab showing its
+    /// number. Hovering it summons the dock.
+    fn render_handle(&mut self, rows: usize, cols: usize) {
+        let p = &self.pal;
+        let w = cols.max(1);
+        let mut lines: Vec<String> = Vec::new();
+        let mut map: Vec<Row> = Vec::new();
+        let centre = |txt: &str| -> String {
+            let n = txt.chars().count();
+            let left = w.saturating_sub(n) / 2;
+            format!(
+                "{}{}{}",
+                " ".repeat(left),
+                txt,
+                " ".repeat(w.saturating_sub(n + left))
+            )
+        };
+        if self.show_header {
+            lines.push(theme::render(&format!(
+                "#[fg={}]{}",
+                p.dim,
+                centre("\u{2261}")
+            )));
+            map.push(Row::Header);
+        }
+        for t in &self.tabs {
+            let idx = (t.position + 1).to_string();
+            let flashing = self.flash.get(&t.position).is_some_and(|n| n % 2 == 0);
+            let line = if flashing {
+                format!("#[fg={},bold]{}", p.warn, centre(&idx))
+            } else if t.active {
+                let body: String = centre(&idx).chars().skip(1).collect();
+                format!(
+                    "#[bg={}]#[fg={}]\u{258c}#[fg={},bold]{}",
+                    p.surface, p.accent, p.text, body
+                )
+            } else if t.has_bell_notification {
+                format!("#[fg={}]{}", p.warn, centre(&idx))
+            } else if self.hover == Some(map.len()) {
+                format!("#[fg={}]{}", p.text, centre(&idx))
+            } else {
+                format!("#[fg={}]{}", p.subtext, centre(&idx))
+            };
+            lines.push(theme::render(&line));
+            map.push(Row::Tab { pos: t.position });
+        }
+        let mut out = String::new();
+        for i in 0..rows {
+            let l = lines.get(i).cloned().unwrap_or_default();
+            out.push_str(&l);
+            for _ in theme::width(&l)..w {
+                out.push(' ');
+            }
+            if i + 1 < rows {
+                out.push('\n');
+            }
+        }
+        print!("{out}");
+        self.rows = map;
+    }
+
+    fn summon_dock(&self) {
+        pipe_message_to_plugin(MessageToPlugin::new("zjsidetabs").with_payload("peek"));
     }
 
     /// The minimized band: one glyph per tab. Active in accent, bell in
@@ -721,6 +904,65 @@ impl State {
     }
 
     fn mouse(&mut self, m: Mouse) -> bool {
+        if self.role == Role::Handle {
+            return match m {
+                Mouse::Hover(line, _) => {
+                    if self.hover_expand {
+                        self.summon_dock();
+                    }
+                    let h = usize::try_from(line)
+                        .ok()
+                        .filter(|i| matches!(self.rows.get(*i), Some(Row::Tab { .. })));
+                    if h != self.hover {
+                        self.hover = h;
+                        return true;
+                    }
+                    false
+                }
+                Mouse::LeftClick(line, _) => {
+                    if let Some(Row::Tab { pos }) = usize::try_from(line)
+                        .ok()
+                        .and_then(|i| self.rows.get(i).cloned())
+                    {
+                        switch_tab_to(pos as u32 + 1);
+                    }
+                    true
+                }
+                Mouse::RightClick(..) => {
+                    pipe_message_to_plugin(
+                        MessageToPlugin::new("zjsidetabs").with_payload("toggle"),
+                    );
+                    true
+                }
+                Mouse::ScrollUp(_) => {
+                    self.step_tab(false);
+                    true
+                }
+                Mouse::ScrollDown(_) => {
+                    self.step_tab(true);
+                    true
+                }
+                _ => false,
+            };
+        }
+        // Dock: a peeked dock closes once you've picked something.
+        if self.role == Role::Dock {
+            if let Mouse::LeftClick(line, _) = m {
+                let was_peek = self.peek;
+                if let Some(i) = usize::try_from(line).ok() {
+                    if matches!(
+                        self.rows.get(i),
+                        Some(Row::Tab { .. } | Row::Pane { .. } | Row::Activity { .. })
+                    ) {
+                        self.activate(i);
+                        if was_peek {
+                            self.dock_hide();
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
         match m {
             Mouse::LeftClick(line, col) => {
                 let Ok(i) = usize::try_from(line) else {

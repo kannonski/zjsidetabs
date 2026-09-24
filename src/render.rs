@@ -67,6 +67,8 @@ pub struct Ctx<'a> {
     pub spinner: usize,
     /// (tab position, buffer) of an inline rename in progress.
     pub rename: Option<(usize, &'a str)>,
+    /// Header text; None → session name.
+    pub header: Option<&'a str>,
     /// Tabs mid bell-flash → ticks left (parity picks the colour).
     pub flash: &'a HashMap<usize, u8>,
     pub pal: &'a Palette,
@@ -271,7 +273,7 @@ impl<'a> Ctx<'a> {
         let w = self.inner();
         let body = match row {
             Row::Header => {
-                let name = self.session.unwrap_or("zellij");
+                let name = self.header.or(self.session).unwrap_or("zellij");
                 let content = pad(
                     &format!(
                         "#[fg={}]\u{f120} #[fg={}]{}",
