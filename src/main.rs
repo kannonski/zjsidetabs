@@ -16,8 +16,6 @@ use render::{Ctx, Palette};
 const SPINNER_SECS: f64 = 0.2;
 /// How long the mouse must be gone before a hover-expanded rail collapses.
 const PEEK_SECS: f64 = 1.0;
-/// Handle: minimum spacing between dock launches.
-const LAUNCH_COOLDOWN_SECS: f64 = 1.5;
 /// Widths at or below this render as the minimized band.
 const MINI_COLS: usize = 3;
 const DEFAULT_FULL_WIDTH: usize = 30;
@@ -110,8 +108,10 @@ struct State {
     dock_url: String,
     /// Handle: dock options forwarded from our own config.
     dock_cfg: BTreeMap<String, String>,
-    /// Handle: a launch was requested and the dock has not appeared yet.
-    dock_launching: bool,
+    /// Handle: rows show tab names instead of icon + pane count. `names_pinned`
+    /// is the Cmd+B state; `names_hover` is transient while the mouse is over.
+    names_pinned: bool,
+    names_hover: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -249,9 +249,6 @@ impl ZellijPlugin for State {
                     .flatten()
                     .any(|p| p.is_plugin && p.id == self.plugin_id && p.is_floating);
                 if self.role == Role::Handle {
-                    if self.dock_open {
-                        self.dock_launching = false;
-                    }
                     self.dock_open = self.own_tab().is_some_and(|(_, ps)| {
                         ps.iter().any(|p| {
                             p.is_plugin
@@ -277,7 +274,15 @@ impl ZellijPlugin for State {
                     return false;
                 }
                 if self.role == Role::Handle {
-                    self.dock_launching = false;
+                    if self.names_hover {
+                        if self.hover_seen {
+                            self.hover_seen = false;
+                            self.arm(PEEK_SECS);
+                        } else {
+                            self.names_hover = false;
+                            self.hover = None;
+                        }
+                    }
                 }
                 self.flash.retain(|_, n| {
                     *n -= 1;
@@ -314,19 +319,9 @@ impl ZellijPlugin for State {
                     return false;
                 }
                 match cmd {
-                    "toggle" => {
-                        if self.dock_open {
-                            self.dock_send("hide");
-                        } else {
-                            self.dock_send("show");
-                        }
-                    }
-                    "show" | "max" | "expand" => self.dock_send("show"),
-                    "hide" | "min" | "collapse" => {
-                        if self.dock_open {
-                            self.dock_send("hide");
-                        }
-                    }
+                    "toggle" => self.names_pinned = !self.names_pinned,
+                    "show" | "max" | "expand" | "names" => self.names_pinned = true,
+                    "hide" | "min" | "collapse" | "compact" => self.names_pinned = false,
                     _ => return false,
                 }
                 return true;
@@ -638,31 +633,12 @@ impl State {
         )]);
     }
 
-    /// Handle → dock. With a url + config the message matches a running dock
-    /// exactly, and launches one (floating, over the handle) when none runs.
-    fn dock_send(&self, payload: &str) {
-        let msg = MessageToPlugin::new("zjsidetabs")
-            .with_plugin_url(&self.dock_url)
-            .with_plugin_config(self.dock_cfg.clone())
-            .with_payload(payload)
-            .with_floating_pane_coordinates(FloatingPaneCoordinates {
-                // beside the handle, 1 column wide; the dock grows itself
-                x: Some(PercentOrFixed::Fixed(self.cols)),
-                y: Some(PercentOrFixed::Fixed(0)),
-                width: Some(PercentOrFixed::Fixed(1)),
-                height: Some(PercentOrFixed::Percent(100)),
-                pinned: Some(true),
-                borderless: Some(true),
-            })
-            .new_plugin_instance_should_float(true);
-        pipe_message_to_plugin(msg);
-    }
-
     /// The handle: a thin tiled strip with one row per tab showing its
     /// number. Hovering it summons the dock.
     fn render_handle(&mut self, rows: usize, cols: usize) {
         let p = &self.pal;
         let w = cols.max(1);
+        let names = self.names_pinned || self.names_hover;
         let mut lines: Vec<String> = Vec::new();
         let mut map: Vec<Row> = Vec::new();
         let pad = |txt: &str| -> String {
@@ -670,23 +646,28 @@ impl State {
             format!("{txt}{}", " ".repeat(w.saturating_sub(n)))
         };
         if self.show_header {
-            lines.push(theme::render(&pad(&format!(" #[fg={}]\u{2261}", p.dim))));
+            let title = if names {
+                self.header
+                    .clone()
+                    .or_else(|| self.session.clone())
+                    .unwrap_or_default()
+            } else {
+                "\u{2261}".to_string()
+            };
+            let title = render::fit(&title, w.saturating_sub(2));
+            lines.push(theme::render(&pad(&format!(" #[fg={}]{title}", p.dim))));
             map.push(Row::Header);
         }
         for t in &self.tabs {
             let idx = t.position + 1;
-            let panes = self
-                .panes
-                .get(&t.position)
-                .map(|ps| {
-                    ps.iter()
-                        .filter(|p| !p.is_plugin && p.is_selectable && !p.is_suppressed)
-                        .count()
-                })
-                .unwrap_or(0);
+            let panes: Vec<PaneInfo> = self.panes.get(&t.position).cloned().unwrap_or_default();
+            let live = panes
+                .iter()
+                .filter(|p| !p.is_plugin && p.is_selectable && !p.is_suppressed)
+                .count();
+            let label = model::label(t, &panes);
             let flashing = self.flash.get(&t.position).is_some_and(|n| n % 2 == 0);
-            // "▌ 2  3": accent bar (active) · tab number · pane count, dimmer
-            let (bar, c_idx, c_cnt, bold) = if flashing {
+            let (bar, c_idx, c_aux, bold) = if flashing {
                 (
                     format!("#[fg={}]\u{258c}", p.warn),
                     &p.warn,
@@ -707,12 +688,24 @@ impl State {
             } else {
                 (" ".into(), &p.subtext, &p.dim, "")
             };
-            let count = if panes > 1 {
-                format!("#[fg={c_cnt}]{panes}")
+            // rest:  ▌ 2 󰄛 3      hover/pinned:  ▌ 2 gitlab
+            let line = if names {
+                let room = w.saturating_sub(5);
+                format!(
+                    "{bar}#[fg={c_idx}{bold}]{idx:>2} #[fg={c_idx}{bold}]{}",
+                    render::fit(&label.text, room)
+                )
             } else {
-                String::new()
+                let count = if live > 1 {
+                    format!(" #[fg={c_aux}]{live}")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{bar}#[fg={c_idx}{bold}]{idx:>2} #[fg={c_aux}]{}{count}",
+                    label.icon
+                )
             };
-            let line = format!("{bar}#[fg={c_idx}{bold}]{idx:>2} {count}");
             lines.push(theme::render(&pad(&line)));
             map.push(Row::Tab { pos: t.position });
         }
@@ -969,15 +962,11 @@ impl State {
         if self.role == Role::Handle {
             return match m {
                 Mouse::Hover(line, _) => {
-                    if self.hover_expand {
-                        if self.dock_open {
-                            self.dock_send("peek");
-                        } else if !self.dock_launching {
-                            self.dock_launching = true;
-                            self.arm(LAUNCH_COOLDOWN_SECS);
-                            self.dock_send("peek");
-                        }
+                    if self.hover_expand && !self.names_hover {
+                        self.names_hover = true;
                     }
+                    self.hover_seen = true;
+                    self.arm(PEEK_SECS);
                     let h = usize::try_from(line)
                         .ok()
                         .filter(|i| matches!(self.rows.get(*i), Some(Row::Tab { .. })));
@@ -997,7 +986,7 @@ impl State {
                     true
                 }
                 Mouse::RightClick(..) => {
-                    self.dock_send(if self.dock_open { "hide" } else { "show" });
+                    self.names_pinned = !self.names_pinned;
                     true
                 }
                 Mouse::ScrollUp(_) => {
