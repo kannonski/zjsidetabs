@@ -650,7 +650,8 @@ impl State {
                     .or_else(|| self.session.clone())
                     .unwrap_or_default()
             } else {
-                "\u{2261}".to_string()
+                // build tag: a screenshot then shows which wasm is really running
+                format!("\u{2261} {}", env!("CARGO_PKG_VERSION"))
             };
             let title = render::fit(&title, w.saturating_sub(2));
             lines.push(theme::render(&pad(&format!(" #[fg={}]{title}", p.dim))));
