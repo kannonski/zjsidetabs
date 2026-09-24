@@ -722,13 +722,9 @@ impl State {
             self.anim_width = target;
             return;
         }
-        let remaining = self.cols.abs_diff(target);
-        let step = ((remaining as f64) * 0.4).ceil().max(1.0) as usize;
-        self.anim_width = if self.cols < target {
-            (self.cols + step).min(target)
-        } else {
-            self.cols.saturating_sub(step).max(target)
-        };
+        // One jump. Every intermediate width is a full zellij re-layout, so
+        // tweening reads as jitter, not motion.
+        self.anim_width = target;
         change_floating_panes_coordinates(vec![(
             PaneId::Plugin(self.plugin_id),
             FloatingPaneCoordinates {
