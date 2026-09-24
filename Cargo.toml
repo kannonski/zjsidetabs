@@ -1,6 +1,6 @@
 [package]
 name = "zjsidetabs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A super-powered vertical side tab bar for zellij: foldable pane tree, per-program icons, filter/jump, activity rows."
 license = "MIT"
