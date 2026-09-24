@@ -15,7 +15,9 @@ use render::{Ctx, Palette};
 
 const SPINNER_SECS: f64 = 0.2;
 /// How long the mouse must be gone before a hover-expanded rail collapses.
-const PEEK_SECS: f64 = 0.45;
+const PEEK_SECS: f64 = 1.0;
+/// Handle: minimum spacing between dock launches.
+const LAUNCH_COOLDOWN_SECS: f64 = 1.5;
 /// Widths at or below this render as the minimized band.
 const MINI_COLS: usize = 3;
 const DEFAULT_FULL_WIDTH: usize = 30;
@@ -108,6 +110,8 @@ struct State {
     dock_url: String,
     /// Handle: dock options forwarded from our own config.
     dock_cfg: BTreeMap<String, String>,
+    /// Handle: a launch was requested and the dock has not appeared yet.
+    dock_launching: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -177,6 +181,8 @@ impl ZellijPlugin for State {
             }
         }
         self.dock_cfg.insert("role".into(), "dock".into());
+        // hover events only reach a pane that can be a mouse target
+        self.dock_cfg.insert("selectable".into(), "true".into());
         self.dock_cfg
             .insert("dock_x".into(), self.dock_x.to_string());
         request_permission(&[
@@ -212,7 +218,11 @@ impl ZellijPlugin for State {
             // The dock is always the full rail; visibility is the toggle. It is
             // launched at the handle's width and grows to `width` on screen.
             self.mode = Mode::Full;
-            self.anim_width = self.dock_x;
+            self.anim_width = 1;
+            // Arm the peek timer at once: a dock nobody refreshes closes itself.
+            self.peek = true;
+            self.hover_seen = true;
+            self.arm(PEEK_SECS);
         }
         subscribe(&[EventType::Visible]);
     }
@@ -239,6 +249,9 @@ impl ZellijPlugin for State {
                     .flatten()
                     .any(|p| p.is_plugin && p.id == self.plugin_id && p.is_floating);
                 if self.role == Role::Handle {
+                    if self.dock_open {
+                        self.dock_launching = false;
+                    }
                     self.dock_open = self.own_tab().is_some_and(|(_, ps)| {
                         ps.iter().any(|p| {
                             p.is_plugin
@@ -262,6 +275,9 @@ impl ZellijPlugin for State {
                 if self.role == Role::Dock && self.peek && !self.hover_seen {
                     close_self();
                     return false;
+                }
+                if self.role == Role::Handle {
+                    self.dock_launching = false;
                 }
                 self.flash.retain(|_, n| {
                     *n -= 1;
@@ -608,7 +624,11 @@ impl State {
         change_floating_panes_coordinates(vec![(
             PaneId::Plugin(self.plugin_id),
             FloatingPaneCoordinates {
-                x: Some(PercentOrFixed::Fixed(0)),
+                x: Some(PercentOrFixed::Fixed(if self.role == Role::Dock {
+                    self.dock_x
+                } else {
+                    0
+                })),
                 y: Some(PercentOrFixed::Fixed(0)),
                 width: Some(PercentOrFixed::Fixed(self.anim_width)),
                 height: Some(PercentOrFixed::Percent(100)),
@@ -626,9 +646,10 @@ impl State {
             .with_plugin_config(self.dock_cfg.clone())
             .with_payload(payload)
             .with_floating_pane_coordinates(FloatingPaneCoordinates {
-                x: Some(PercentOrFixed::Fixed(0)),
+                // beside the handle, 1 column wide; the dock grows itself
+                x: Some(PercentOrFixed::Fixed(self.cols)),
                 y: Some(PercentOrFixed::Fixed(0)),
-                width: Some(PercentOrFixed::Fixed(self.cols.max(1))),
+                width: Some(PercentOrFixed::Fixed(1)),
                 height: Some(PercentOrFixed::Percent(100)),
                 pinned: Some(true),
                 borderless: Some(true),
@@ -949,7 +970,13 @@ impl State {
             return match m {
                 Mouse::Hover(line, _) => {
                     if self.hover_expand {
-                        self.dock_send("peek");
+                        if self.dock_open {
+                            self.dock_send("peek");
+                        } else if !self.dock_launching {
+                            self.dock_launching = true;
+                            self.arm(LAUNCH_COOLDOWN_SECS);
+                            self.dock_send("peek");
+                        }
                     }
                     let h = usize::try_from(line)
                         .ok()
