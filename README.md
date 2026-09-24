@@ -24,7 +24,10 @@ A vertical, foldable tab rail for [zellij](https://zellij.dev). Tabs on the left
 - **Mouse** — click to switch/focus, hover highlight, scroll to move through tabs (or through the list when it overflows).
 - **Minimize** — collapse the whole rail to a 1-column band (one glyph per tab: active in accent, bell in orange) and back. The resize is stepped, so it animates. Trigger it from a keybind via `MessagePlugin` (below), with `b` / `-` in the rail, or by clicking the band.
 - **Hover to peek** — while minimized, mousing over the band expands the rail; moving away collapses it again ~half a second later. A click, a keypress, or the toggle pins it open. `hover_expand "false"` turns this off.
-- **Keyboard** (when the rail is focused) — `j`/`k` move, `Enter` activate, `l` unfold-or-activate, `h`/`Space` fold, `z` fold/unfold all, `g`/`G` first/last, `/` filter, `Esc` clear.
+- **Rename inline** — `r` on a tab opens an editor in the row; `Enter` saves, `Esc` cancels. A typed name is yours: auto-rename never touches it again.
+- **Drag to reorder** — press on a tab, release on another. (Goes through `zellij action move-tab`; set `zellij_bin` if `zellij` isn't on the server's PATH.)
+- **Bell flash** — a background tab whose pane rings pulses orange for a second, then keeps the bell badge.
+- **Keyboard** (when the rail is focused) — `j`/`k` move, `Enter` activate, `l` unfold-or-activate, `h`/`Space` fold, `z` fold/unfold all, `g`/`G` first/last, `r` rename, `/` filter, `b`/`-` minimize, `Esc` clear.
 
 ## Install
 
@@ -64,7 +67,7 @@ layout {
 }
 ```
 
-Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `ReadApplicationState` and `ChangeApplicationState`; focus the rail and press `y`.
+Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `ReadApplicationState`, `ChangeApplicationState` and `RunCommands` (drag-reorder); focus the rail and press `y`.
 
 ## Options
 
@@ -76,6 +79,7 @@ Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `
 | `show_tree` | `true` | Show panes under unfolded tabs |
 | `hover_expand` | `true` | Minimized band expands on mouse-over, collapses when the mouse leaves |
 | `start_minimized` | `false` | Start as the 1-column band |
+| `zellij_bin` | `zellij` | Binary used for drag-reorder (`move-tab`) |
 | `color_accent` | `#cba6f7` | Active index, chevron, focused-pane dot |
 | `color_text` | `#cdd6f4` | Active / hovered label |
 | `color_subtext` | `#a6adc8` | Inactive label |

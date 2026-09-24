@@ -65,6 +65,10 @@ pub struct Ctx<'a> {
     pub cursor: Option<usize>,
     pub hover: Option<usize>,
     pub spinner: usize,
+    /// (tab position, buffer) of an inline rename in progress.
+    pub rename: Option<(usize, &'a str)>,
+    /// Tabs mid bell-flash → ticks left (parity picks the colour).
+    pub flash: &'a HashMap<usize, u8>,
     pub pal: &'a Palette,
 }
 
@@ -167,7 +171,10 @@ impl<'a> Ctx<'a> {
         } else {
             " "
         };
-        let (c_idx, c_txt, c_chev, bold) = if tab.active {
+        let flashing = self.flash.get(&pos).is_some_and(|n| n % 2 == 0);
+        let (c_idx, c_txt, c_chev, bold) = if flashing {
+            (&p.warn, &p.warn, &p.warn, ",bold")
+        } else if tab.active {
             (&p.accent, &p.text, &p.accent, ",bold")
         } else if self.hover == Some(idx) {
             (&p.subtext, &p.text, &p.muted, "")
@@ -199,7 +206,15 @@ impl<'a> Ctx<'a> {
         let head_w = theme::width(&head);
         let room =
             w.saturating_sub(head_w + theme::width(&right) + if right.is_empty() { 0 } else { 1 });
-        let text = format!("#[fg={c_txt}{bold}]{}", fit(&label.text, room));
+        let text = match self.rename {
+            Some((rp, buf)) if rp == pos => format!(
+                "#[fg={}]{}#[fg={}]\u{258f}",
+                p.text,
+                fit(buf, room.saturating_sub(1)),
+                p.accent
+            ),
+            _ => format!("#[fg={c_txt}{bold}]{}", fit(&label.text, room)),
+        };
         let content = spread(&format!("{head}{text}"), &right, w);
         self.frame(&content, tab.active, idx)
     }

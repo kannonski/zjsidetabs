@@ -18,6 +18,8 @@ const PEEK_SECS: f64 = 0.45;
 /// Widths at or below this render as the minimized band.
 const MINI_COLS: usize = 3;
 const DEFAULT_FULL_WIDTH: usize = 30;
+/// Timer ticks a bell flash lasts (at SPINNER_SECS each).
+const FLASH_TICKS: u8 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Mode {
@@ -66,6 +68,15 @@ struct State {
     /// the last shell exits; when that happens we close ourselves so the
     /// tab goes with us, like the built-in bars do.
     had_terminal: bool,
+    /// Inline tab rename in progress: (tab position, buffer).
+    rename: Option<(usize, String)>,
+    /// Mouse-down on a tab row: (row index, tab position). A release on a
+    /// different tab row reorders.
+    drag: Option<(usize, usize)>,
+    /// Tabs whose bell just rang, with ticks of flash left.
+    flash: HashMap<usize, u8>,
+    bell_seen: HashSet<usize>,
+    zellij_bin: String,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -81,6 +92,7 @@ impl ZellijPlugin for State {
         self.show_header = true;
         self.show_tree = true;
         self.hover_expand = true;
+        self.zellij_bin = "zellij".into();
         for (k, v) in &cfg {
             if self.pal.apply(k, v) {
                 continue;
@@ -92,6 +104,7 @@ impl ZellijPlugin for State {
                 "show_header" => self.show_header = on,
                 "show_tree" => self.show_tree = on,
                 "hover_expand" => self.hover_expand = on,
+                "zellij_bin" => self.zellij_bin = v.clone(),
                 "start_minimized" if on => self.mode = Mode::Mini,
                 _ => {}
             }
@@ -99,6 +112,7 @@ impl ZellijPlugin for State {
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
+            PermissionType::RunCommands,
         ]);
         subscribe(&[
             EventType::TabUpdate,
@@ -124,6 +138,7 @@ impl ZellijPlugin for State {
             Event::TabUpdate(tabs) => {
                 self.tabs = tabs;
                 self.tabs.sort_by_key(|t| t.position);
+                self.note_bells();
                 self.maybe_rename();
                 true
             }
@@ -138,6 +153,10 @@ impl ZellijPlugin for State {
             Event::Timer(_) => {
                 self.timer_armed = false;
                 self.spinner = self.spinner.wrapping_add(1);
+                self.flash.retain(|_, n| {
+                    *n -= 1;
+                    *n > 0
+                });
                 if self.peek {
                     if self.hover_seen {
                         self.hover_seen = false;
@@ -234,6 +253,8 @@ impl ZellijPlugin for State {
             cursor: self.cursor,
             hover: self.hover,
             spinner: self.spinner,
+            rename: self.rename.as_ref().map(|(p, b)| (*p, b.as_str())),
+            flash: &self.flash,
             pal: &self.pal,
         };
         let mut out = String::new();
@@ -249,7 +270,8 @@ impl ZellijPlugin for State {
         let running = self
             .rows
             .iter()
-            .any(|r| matches!(r, Row::Activity { glyph, .. } if glyph == "\u{25b6}"));
+            .any(|r| matches!(r, Row::Activity { glyph, .. } if glyph == "\u{25b6}"))
+            || !self.flash.is_empty();
         if running && !self.timer_armed {
             self.timer_armed = true;
             set_timeout(SPINNER_SECS);
@@ -287,6 +309,67 @@ impl State {
         match self.tabs.iter().find(|t| t.position == pos) {
             Some(t) => close_tab_with_id(t.tab_id as u64),
             None => close_self(),
+        }
+    }
+
+    /// Rising edge of a bell on a background tab starts a flash.
+    fn note_bells(&mut self) {
+        for t in &self.tabs {
+            if t.has_bell_notification && !t.active {
+                if !self.bell_seen.contains(&t.position) {
+                    self.bell_seen.insert(t.position);
+                    self.flash.insert(t.position, FLASH_TICKS);
+                }
+            } else {
+                self.bell_seen.remove(&t.position);
+            }
+        }
+    }
+
+    fn begin_rename(&mut self, pos: usize) {
+        let current = self
+            .tabs
+            .iter()
+            .find(|t| t.position == pos)
+            .map(|t| {
+                if model::is_default_name(&t.name) {
+                    String::new()
+                } else {
+                    t.name.clone()
+                }
+            })
+            .unwrap_or_default();
+        self.rename = Some((pos, current));
+    }
+
+    fn commit_rename(&mut self) {
+        let Some((pos, buf)) = self.rename.take() else {
+            return;
+        };
+        let name = buf.trim();
+        if name.is_empty() {
+            return;
+        }
+        if let Some(t) = self.tabs.iter().find(|t| t.position == pos) {
+            rename_tab_with_id(t.tab_id as u64, name);
+            // A typed name is the user's: never auto-rename over it again.
+            self.our_names.remove(&pos);
+        }
+    }
+
+    /// Move tab `from` to `to` by focusing it and stepping with the CLI;
+    /// 0.45 exposes no move-tab command to plugins.
+    fn reorder(&mut self, from: usize, to: usize) {
+        if from == to {
+            return;
+        }
+        switch_tab_to(from as u32 + 1);
+        let dir = if to > from { "right" } else { "left" };
+        for _ in 0..from.abs_diff(to) {
+            run_command(
+                &[&self.zellij_bin, "action", "move-tab", dir],
+                BTreeMap::new(),
+            );
         }
     }
 
@@ -488,6 +571,18 @@ impl State {
         // Typing into the rail means the user wants it: stop treating the
         // expansion as a hover peek.
         self.peek = false;
+        if let Some((_, buf)) = self.rename.as_mut() {
+            match k.bare_key {
+                BareKey::Esc => self.rename = None,
+                BareKey::Enter => self.commit_rename(),
+                BareKey::Backspace => {
+                    buf.pop();
+                }
+                BareKey::Char(c) if !k.key_modifiers.contains(&KeyModifier::Ctrl) => buf.push(c),
+                _ => return false,
+            }
+            return true;
+        }
         if let Some(q) = self.filter.as_mut() {
             match k.bare_key {
                 BareKey::Esc => self.filter = None,
@@ -510,6 +605,11 @@ impl State {
         }
         match k.bare_key {
             BareKey::Char('b') | BareKey::Char('-') => self.set_mode(Mode::Mini),
+            BareKey::Char('r') => {
+                if let Some(t) = self.cursor.and_then(|c| self.row_tab(c)) {
+                    self.begin_rename(t);
+                }
+            }
             BareKey::Char('/') => self.filter = Some(String::new()),
             BareKey::Char('j') | BareKey::Down => self.move_cursor(true),
             BareKey::Char('k') | BareKey::Up => self.move_cursor(false),
@@ -561,6 +661,10 @@ impl State {
                 };
                 // A click pins a hover-peeked rail open.
                 self.peek = false;
+                self.drag = match self.rows.get(i) {
+                    Some(Row::Tab { pos }) => Some((i, *pos)),
+                    _ => None,
+                };
                 if self.mode == Mode::Mini {
                     if let Some(Row::Tab { pos }) = self.rows.get(i).cloned() {
                         switch_tab_to(pos as u32 + 1);
@@ -589,6 +693,33 @@ impl State {
                 if let Some(t) = usize::try_from(line).ok().and_then(|i| self.row_tab(i)) {
                     self.toggle(t);
                     return true;
+                }
+                false
+            }
+            Mouse::Hold(line, _) => {
+                if self.drag.is_some() {
+                    let h = usize::try_from(line)
+                        .ok()
+                        .filter(|i| matches!(self.rows.get(*i), Some(Row::Tab { .. })));
+                    if h != self.hover {
+                        self.hover = h;
+                        return true;
+                    }
+                }
+                false
+            }
+            Mouse::Release(line, _) => {
+                let Some((from_row, from_pos)) = self.drag.take() else {
+                    return false;
+                };
+                let Ok(i) = usize::try_from(line) else {
+                    return false;
+                };
+                if i != from_row {
+                    if let Some(Row::Tab { pos }) = self.rows.get(i).cloned() {
+                        self.reorder(from_pos, pos);
+                        return true;
+                    }
                 }
                 false
             }
