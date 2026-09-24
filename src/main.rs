@@ -686,23 +686,26 @@ impl State {
             } else {
                 (" ".into(), &p.subtext, &p.dim, "")
             };
-            // rest:  ▌ 2 󰄛 3      hover/pinned:  ▌ 2 gitlab
-            let line = if names {
-                let room = w.saturating_sub(5);
-                format!(
-                    "{bar}#[fg={c_idx}{bold}]{idx:>2} #[fg={c_idx}{bold}]{}",
-                    render::fit(&label.text, room)
-                )
+            // collapsed:  ▌󰄛 ⌘2 3        expanded:  ▌󰄛 ⌘2 gitlab      3
+            let count = if live > 1 {
+                format!("#[fg={c_aux}]{live}")
             } else {
-                let count = if live > 1 {
-                    format!(" #[fg={c_aux}]{live}")
-                } else {
-                    String::new()
-                };
-                format!(
-                    "{bar}#[fg={c_idx}{bold}]{idx:>2} #[fg={c_aux}]{}{count}",
-                    label.icon
-                )
+                String::new()
+            };
+            let head = format!(
+                "{bar}#[fg={c_aux}]{} #[fg={c_idx}{bold}]\u{2318}{idx}",
+                label.icon
+            );
+            let line = if names {
+                let used = theme::width(&head) + 1 + theme::width(&count) + 1;
+                let name = render::fit(&label.text, w.saturating_sub(used));
+                let left = format!("{head} #[fg={c_idx}{bold}]{name}");
+                let gap = w.saturating_sub(theme::width(&left) + theme::width(&count) + 1);
+                format!("{left}{}{count} ", " ".repeat(gap))
+            } else if count.is_empty() {
+                head
+            } else {
+                format!("{head} {count}")
             };
             lines.push(theme::render(&pad(&line)));
             map.push(Row::Tab { pos: t.position });
