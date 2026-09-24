@@ -746,52 +746,60 @@ impl State {
                 .filter(|p| !p.is_plugin && p.is_selectable && !p.is_suppressed)
                 .count();
             let label = model::label(t, &panes);
+            let detail = model::detail(t, &panes);
             let flashing = self.flash.get(&t.position).is_some_and(|n| n % 2 == 0);
-            let (bar, c_idx, c_aux, bold) = if flashing {
-                (
-                    format!("#[fg={}]\u{2588}", p.warn),
-                    &p.warn,
-                    &p.warn,
-                    ",bold",
-                )
+            let hovered = self.hover.is_some_and(
+                |h| matches!(map.get(h), Some(Row::Tab { pos }) if *pos == t.position),
+            );
+            let (c_main, c_sub, c_icon) = if flashing {
+                (&p.warn, &p.warn, &p.warn)
             } else if t.active {
-                (
-                    format!("#[bg={}]#[fg={}]\u{2588}", p.surface, p.accent),
-                    &p.text,
-                    &p.accent,
-                    ",bold",
-                )
+                (&p.text, &p.subtext, &p.accent)
             } else if t.has_bell_notification {
-                (" ".into(), &p.warn, &p.warn, "")
-            } else if self.hover == Some(map.len()) {
-                (" ".into(), &p.text, &p.subtext, "")
+                (&p.warn, &p.dim, &p.warn)
+            } else if hovered {
+                (&p.text, &p.subtext, &p.subtext)
             } else {
-                (" ".into(), &p.subtext, &p.dim, "")
+                (&p.subtext, &p.dim, &p.dim)
             };
-            // Two lines per tab, always, so hovering never shifts rows:
-            //   █ 󰆍  ⌘2        3      (icon · shortcut · dim pane count)
-            //   █     gitlab          (name; empty at rest)
+            let inner = w.saturating_sub(2);
+            // Three lines per tab:  󰆍  ⌘2      3  /  gitlab  /  ~/Project/gitlab
             let count = if live > 1 {
                 format!("#[fg={}]{live}", p.dim)
             } else {
                 String::new()
             };
-            let first_left = format!(
-                "{bar} #[fg={c_aux}]{}  #[fg={c_idx}{bold}]\u{2318}{idx}",
+            let l1_left = format!(
+                "#[fg={c_icon}]{}  #[fg={c_main},bold]\u{2318}{idx}",
                 label.icon
             );
-            let gap = w.saturating_sub(theme::width(&first_left) + theme::width(&count) + 1);
-            let first = format!("{first_left}{}{count} ", " ".repeat(gap));
-            // second line: the pane's path (or name) always; hover widens the
-            // rail so more of it shows
-            let detail = model::detail(t, &panes);
-            let shown = render::fit_tail(&detail, w.saturating_sub(6));
-            let c_detail = if t.active { &p.subtext } else { &p.dim };
-            let second = format!("{bar}     #[fg={c_detail}]{shown}");
-            lines.push(theme::render(&pad(&first)));
-            map.push(Row::Tab { pos: t.position });
-            lines.push(theme::render(&pad(&second)));
-            map.push(Row::Tab { pos: t.position });
+            let gap = inner.saturating_sub(theme::width(&l1_left) + theme::width(&count));
+            let l1 = format!("{l1_left}{}{count}", " ".repeat(gap));
+            let l2 = format!(
+                "    #[fg={c_main}]{}",
+                render::fit(&label.text, inner.saturating_sub(4))
+            );
+            let l3 = format!(
+                "    #[fg={c_sub}]{}",
+                render::fit_tail(&detail, inner.saturating_sub(4))
+            );
+            // The active entry is a rounded pill on every line: cap · filled row · cap.
+            let wrap = |content: String| -> String {
+                if t.active {
+                    let n = theme::width(&content);
+                    format!(
+                        "#[fg={s}]\u{e0b6}#[bg={s}]{content}{}#[bg=none,fg={s}]\u{e0b4}",
+                        " ".repeat(inner.saturating_sub(n)),
+                        s = p.surface
+                    )
+                } else {
+                    format!(" {content}")
+                }
+            };
+            for l in [l1, l2, l3] {
+                lines.push(theme::render(&pad(&wrap(l))));
+                map.push(Row::Tab { pos: t.position });
+            }
             for _ in 0..self.row_gap {
                 lines.push(String::new());
                 map.push(Row::Blank);
