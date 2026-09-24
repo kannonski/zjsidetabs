@@ -273,15 +273,13 @@ impl ZellijPlugin for State {
                     close_self();
                     return false;
                 }
-                if self.role == Role::Handle {
-                    if self.names_hover {
-                        if self.hover_seen {
-                            self.hover_seen = false;
-                            self.arm(PEEK_SECS);
-                        } else {
-                            self.names_hover = false;
-                            self.hover = None;
-                        }
+                if self.role == Role::Handle && self.names_hover {
+                    if self.hover_seen {
+                        self.hover_seen = false;
+                        self.arm(PEEK_SECS);
+                    } else {
+                        self.names_hover = false;
+                        self.hover = None;
                     }
                 }
                 self.flash.retain(|_, n| {
