@@ -706,7 +706,6 @@ impl State {
         // last column is a vertical rule separating the rail from the terminal
         let border = theme::render(&format!("#[fg={}]\u{2502}", p.surface_hi));
         let w = cols.max(2) - 1;
-        let names = self.names_pinned || self.names_hover;
         let mut lines: Vec<String> = Vec::new();
         let mut map: Vec<Row> = Vec::new();
         let pad = |txt: &str| -> String {
