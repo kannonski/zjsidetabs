@@ -124,6 +124,8 @@ struct State {
     /// Rail launched as a jump palette: filter armed on open, Esc closes,
     /// Enter jumps and closes.
     palette: bool,
+    /// Handle: focus was handed to the terminal once after the tab opened.
+    yielded_focus: bool,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -299,6 +301,7 @@ impl ZellijPlugin for State {
                     });
                 }
                 self.close_if_orphaned();
+                self.yield_focus();
                 self.maybe_rename();
                 true
             }
@@ -529,6 +532,31 @@ impl State {
                     tooltip_text: Some("open link".to_string()),
                 }],
             );
+        }
+    }
+
+    /// A selectable floating pane is focused when its tab is created, so the
+    /// cursor would land in the rail on Cmd+T. Give focus to the tab's terminal
+    /// pane once; after that focus is whatever the user does.
+    fn yield_focus(&mut self) {
+        if self.yielded_focus || self.role != Role::Handle || !self.selectable {
+            return;
+        }
+        let Some((_, panes)) = self.own_tab().map(|(p, ps)| (p, ps.clone())) else {
+            return;
+        };
+        let me_focused = panes
+            .iter()
+            .any(|p| p.is_plugin && p.id == self.plugin_id && p.is_focused);
+        let Some(term) = panes
+            .iter()
+            .find(|p| !p.is_plugin && p.is_selectable && !p.is_suppressed)
+        else {
+            return;
+        };
+        self.yielded_focus = true;
+        if me_focused {
+            focus_terminal_pane(term.id, false, false);
         }
     }
 
