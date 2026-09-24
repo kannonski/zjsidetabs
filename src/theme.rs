@@ -1,5 +1,6 @@
 //! Inline `#[fg=...,bg=...,bold]` markup, rendered to ANSI.
 
+#[derive(Default, Clone)]
 pub struct Style {
     pub fg: Option<String>,
     pub bg: Option<String>,
@@ -7,11 +8,14 @@ pub struct Style {
     pub dim: bool,
 }
 
-/// Render `#[...]`-annotated text to an ANSI string. Unknown keys are dropped
-/// rather than printed, so a typo degrades to plain text instead of leaking
-/// markup into the sidebar.
+/// Render `#[...]`-annotated text to an ANSI string. Tags are cumulative: a
+/// `#[fg=x]` inside a `#[bg=y]` span keeps the background, so a row can be
+/// filled once and recoloured piecewise. `fg=none` / `bg=none` clear one
+/// channel, `#[reset]` clears everything. Unknown keys are dropped rather
+/// than printed, so a typo degrades to plain text instead of leaking markup.
 pub fn render(input: &str) -> String {
     let mut out = String::new();
+    let mut cur = Style::default();
     let mut rest = input;
     while let Some(start) = rest.find("#[") {
         out.push_str(&rest[..start]);
@@ -20,7 +24,8 @@ pub fn render(input: &str) -> String {
             out.push_str(&rest[start..]);
             return out;
         };
-        out.push_str(&ansi(&parse(&after[..end])));
+        apply(&mut cur, &after[..end]);
+        out.push_str(&ansi(&cur));
         rest = &after[end + 1..];
     }
     out.push_str(rest);
@@ -28,18 +33,14 @@ pub fn render(input: &str) -> String {
     out
 }
 
-fn parse(spec: &str) -> Style {
-    let mut s = Style {
-        fg: None,
-        bg: None,
-        bold: false,
-        dim: false,
-    };
+fn apply(s: &mut Style, spec: &str) {
     for part in spec.split(',') {
         let part = part.trim();
         match part {
             "bold" => s.bold = true,
+            "nobold" => s.bold = false,
             "dim" | "dimmed" => s.dim = true,
+            "reset" => *s = Style::default(),
             _ => match part.split_once('=') {
                 Some(("fg", v)) => s.fg = colour(v),
                 Some(("bg", v)) => s.bg = colour(v),
@@ -47,7 +48,6 @@ fn parse(spec: &str) -> Style {
             },
         }
     }
-    s
 }
 
 /// `#rrggbb`, `#rgb`, a 0-255 palette index, or `none`.
@@ -130,6 +130,20 @@ mod tests {
     #[test]
     fn palette_index_uses_256_form() {
         assert!(render("#[fg=183]x").contains("38;5;183"));
+    }
+
+    #[test]
+    fn inner_fg_tag_keeps_outer_bg() {
+        let out = render("#[bg=#313244]a#[fg=#fff]b");
+        // The segment after the fg-only tag must still carry the background.
+        assert_eq!(out.matches("48;2;49;50;68").count(), 2, "{out:?}");
+    }
+
+    #[test]
+    fn bg_none_clears_background() {
+        let out = render("#[bg=#313244]a#[bg=none]b");
+        let tail = out.rsplit("\u{1b}[0m").nth(1).unwrap_or("");
+        assert!(!tail.contains("48;2;49;50;68"));
     }
 
     #[test]

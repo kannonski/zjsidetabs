@@ -256,7 +256,7 @@ impl<'a> Ctx<'a> {
                 let name = self.session.unwrap_or("zellij");
                 let content = pad(
                     &format!(
-                        "#[fg={}]\u{f0362} #[fg={}]{}",
+                        "#[fg={}]\u{f120} #[fg={}]{}",
                         p.muted,
                         p.subtext,
                         fit(name, w.saturating_sub(2))

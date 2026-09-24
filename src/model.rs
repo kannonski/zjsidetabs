@@ -148,7 +148,9 @@ pub fn label(tab: &TabInfo, panes: &[PaneInfo]) -> Label {
     }
 }
 
-/// Short human name for a pane: command basename, else its title.
+/// Short human name for a pane: command basename; for a bare shell (no
+/// command reported) the cwd basename out of a `user@host:path` title, else
+/// the title itself.
 pub fn program_name(p: &PaneInfo) -> String {
     if let Some(cmd) = p.terminal_command.as_deref() {
         let mut parts = cmd.split_whitespace().filter(|s| !s.contains('='));
@@ -162,7 +164,23 @@ pub fn program_name(p: &PaneInfo) -> String {
             return base.to_string();
         }
     }
-    p.title.clone()
+    shell_label(&p.title)
+}
+
+/// `okkan@host:~/Project/gitlab` → `gitlab`; `~` → `~`; anything else as-is.
+pub fn shell_label(title: &str) -> String {
+    let path = match title.split_once(':') {
+        Some((who, path)) if who.contains('@') && !path.contains(' ') => path,
+        _ => return title.to_string(),
+    };
+    if path == "/" || path == "~" {
+        return path.to_string();
+    }
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        return "/".to_string();
+    }
+    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 pub struct Projection<'a> {
@@ -395,6 +413,15 @@ mod tests {
         let l = label(&tab(0, "infra", true), &p);
         assert_eq!(l.text, "infra");
         assert!(!l.derived);
+    }
+
+    #[test]
+    fn shell_title_collapses_to_cwd_basename() {
+        assert_eq!(shell_label("okkan@okkan:~/Project/gitlab"), "gitlab");
+        assert_eq!(shell_label("okkan@okkan:~"), "~");
+        assert_eq!(shell_label("okkan@okkan:/"), "/");
+        assert_eq!(shell_label("nvim main.rs"), "nvim main.rs");
+        assert_eq!(shell_label("a@b: has space"), "a@b: has space");
     }
 
     #[test]
