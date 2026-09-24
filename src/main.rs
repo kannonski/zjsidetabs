@@ -687,8 +687,9 @@ impl State {
                 (" ".into(), &p.subtext, &p.dim, "")
             };
             // collapsed:  ▌󰄛 ⌘2 3        expanded:  ▌󰄛 ⌘2 gitlab      3
+            // pane count always dim, whatever the row state
             let count = if live > 1 {
-                format!("#[fg={c_aux}]{live}")
+                format!("#[fg={}]{live}", p.dim)
             } else {
                 String::new()
             };
