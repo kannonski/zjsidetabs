@@ -101,10 +101,13 @@ struct State {
     header: Option<String>,
     /// Dock: column where the dock is placed (= handle width).
     dock_x: usize,
-    /// Dock: currently suppressed.
-    hidden: bool,
-    /// Dock: hide_self() issued once, on first render (the pane must exist).
-    dock_initialised: bool,
+    /// Handle: a dock instance currently exists in our tab.
+    dock_open: bool,
+    /// Handle: plugin url used to launch the dock (its own url is not
+    /// exposed to a plugin, so the layout passes it).
+    dock_url: String,
+    /// Handle: dock options forwarded from our own config.
+    dock_cfg: BTreeMap<String, String>,
     auto_expand: bool,
     auto_rename: bool,
     show_header: bool,
@@ -150,6 +153,7 @@ impl ZellijPlugin for State {
                         self.dock_x = x;
                     }
                 }
+                "dock_url" => self.dock_url = v.clone(),
                 "width" => {
                     if let Ok(w) = v.parse::<usize>() {
                         self.full_width = w.max(MINI_COLS + 1);
@@ -159,6 +163,20 @@ impl ZellijPlugin for State {
                 _ => {}
             }
         }
+        for k in [
+            "width",
+            "header",
+            "auto_rename",
+            "auto_expand",
+            "show_tree",
+            "show_header",
+            "zellij_bin",
+        ] {
+            if let Some(v) = cfg.get(k) {
+                self.dock_cfg.insert(k.to_string(), v.clone());
+            }
+        }
+        self.dock_cfg.insert("role".into(), "dock".into());
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
@@ -213,25 +231,30 @@ impl ZellijPlugin for State {
                     .values()
                     .flatten()
                     .any(|p| p.is_plugin && p.id == self.plugin_id && p.is_floating);
+                if self.role == Role::Handle {
+                    self.dock_open = self.own_tab().is_some_and(|(_, ps)| {
+                        ps.iter().any(|p| {
+                            p.is_plugin
+                                && p.is_floating
+                                && p.id != self.plugin_id
+                                && p.plugin_url
+                                    .as_deref()
+                                    .is_some_and(|u| u.contains("zjsidetabs"))
+                        })
+                    });
+                }
                 self.close_if_orphaned();
                 self.maybe_rename();
                 true
             }
             Event::Key(k) => self.key(k),
             Event::Mouse(m) => self.mouse(m),
-            Event::Visible(v) => {
-                if self.role == Role::Dock {
-                    self.hidden = !v;
-                }
-                false
-            }
             Event::Timer(_) => {
                 self.timer_armed = false;
                 self.spinner = self.spinner.wrapping_add(1);
                 if self.role == Role::Dock && self.peek && !self.hover_seen {
-                    self.peek = false;
-                    self.dock_hide();
-                    return true;
+                    close_self();
+                    return false;
                 }
                 self.flash.retain(|_, n| {
                     *n -= 1;
@@ -257,35 +280,46 @@ impl ZellijPlugin for State {
             unblock_cli_pipe_input(&msg.name);
         }
         if msg.name == "zjsidetabs" && self.role != Role::Rail {
-            // The handle ignores rail control; the dock is what gets shown.
-            if self.role == Role::Dock {
-                match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
-                    "peek" => {
-                        if self.hidden {
-                            self.dock_show();
-                        }
-                        self.peek = true;
-                        self.hover_seen = true;
-                        self.arm(PEEK_SECS);
-                    }
+            let cmd = msg.payload.as_deref().map(str::trim).unwrap_or("toggle");
+            if self.role == Role::Handle {
+                // Broadcasts reach every tab's handle; only the visible one acts.
+                let own_active = self
+                    .own_tab()
+                    .and_then(|(pos, _)| self.tabs.iter().find(|t| t.position == pos))
+                    .is_some_and(|t| t.active);
+                if !own_active {
+                    return false;
+                }
+                match cmd {
                     "toggle" => {
-                        if self.hidden {
-                            self.peek = false;
-                            self.dock_show();
+                        if self.dock_open {
+                            self.dock_send("hide");
                         } else {
-                            self.dock_hide();
+                            self.dock_send("show");
                         }
                     }
-                    "show" | "max" | "expand" => {
-                        self.peek = false;
-                        self.dock_show();
+                    "show" | "max" | "expand" => self.dock_send("show"),
+                    "hide" | "min" | "collapse" => {
+                        if self.dock_open {
+                            self.dock_send("hide");
+                        }
                     }
-                    "hide" | "min" | "collapse" => self.dock_hide(),
                     _ => return false,
                 }
                 return true;
             }
-            return false;
+            // Dock
+            match cmd {
+                "peek" => {
+                    self.peek = true;
+                    self.hover_seen = true;
+                    self.arm(PEEK_SECS);
+                }
+                "show" => self.peek = false,
+                "hide" => close_self(),
+                _ => return false,
+            }
+            return true;
         }
         if msg.name == "zjsidetabs" {
             let target = match msg.payload.as_deref().map(str::trim).unwrap_or("toggle") {
@@ -328,13 +362,7 @@ impl ZellijPlugin for State {
             self.render_handle(rows, cols);
             return;
         }
-        if self.role == Role::Dock {
-            if !self.dock_initialised {
-                self.dock_initialised = true;
-                self.dock_hide();
-                return;
-            }
-        } else {
+        if self.role != Role::Dock {
             self.drive_resize();
         }
         if self.mode == Mode::Full && cols > MINI_COLS && self.resize_from.is_none() {
@@ -581,27 +609,23 @@ impl State {
         )]);
     }
 
-    fn dock_show(&mut self) {
-        change_floating_panes_coordinates(vec![(
-            PaneId::Plugin(self.plugin_id),
-            FloatingPaneCoordinates {
-                x: Some(PercentOrFixed::Fixed(self.dock_x)),
+    /// Handle → dock. With a url + config the message matches a running dock
+    /// exactly, and launches one (floating, over the handle) when none runs.
+    fn dock_send(&self, payload: &str) {
+        let msg = MessageToPlugin::new("zjsidetabs")
+            .with_plugin_url(&self.dock_url)
+            .with_plugin_config(self.dock_cfg.clone())
+            .with_payload(payload)
+            .with_floating_pane_coordinates(FloatingPaneCoordinates {
+                x: Some(PercentOrFixed::Fixed(0)),
                 y: Some(PercentOrFixed::Fixed(0)),
                 width: Some(PercentOrFixed::Fixed(self.full_width)),
                 height: Some(PercentOrFixed::Percent(100)),
                 pinned: Some(true),
                 borderless: Some(true),
-            },
-        )]);
-        show_self(true);
-        self.hidden = false;
-    }
-
-    fn dock_hide(&mut self) {
-        hide_self();
-        self.hidden = true;
-        self.peek = false;
-        self.hover = None;
+            })
+            .new_plugin_instance_should_float(true);
+        pipe_message_to_plugin(msg);
     }
 
     /// The handle: a thin tiled strip with one row per tab showing its
@@ -663,10 +687,6 @@ impl State {
         }
         print!("{out}");
         self.rows = map;
-    }
-
-    fn summon_dock(&self) {
-        pipe_message_to_plugin(MessageToPlugin::new("zjsidetabs").with_payload("peek"));
     }
 
     /// The minimized band: one glyph per tab. Active in accent, bell in
@@ -908,7 +928,7 @@ impl State {
             return match m {
                 Mouse::Hover(line, _) => {
                     if self.hover_expand {
-                        self.summon_dock();
+                        self.dock_send("peek");
                     }
                     let h = usize::try_from(line)
                         .ok()
@@ -929,9 +949,7 @@ impl State {
                     true
                 }
                 Mouse::RightClick(..) => {
-                    pipe_message_to_plugin(
-                        MessageToPlugin::new("zjsidetabs").with_payload("toggle"),
-                    );
+                    self.dock_send(if self.dock_open { "hide" } else { "show" });
                     true
                 }
                 Mouse::ScrollUp(_) => {
@@ -956,7 +974,7 @@ impl State {
                     ) {
                         self.activate(i);
                         if was_peek {
-                            self.dock_hide();
+                            close_self();
                         }
                         return true;
                     }
