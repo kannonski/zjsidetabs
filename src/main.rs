@@ -783,21 +783,28 @@ impl State {
                 "    #[fg={c_sub}]{}",
                 render::fit_tail(&detail, inner.saturating_sub(4))
             );
-            // The active entry is a rounded pill on every line: cap · filled row · cap.
-            let wrap = |content: String| -> String {
-                if t.active {
-                    let n = theme::width(&content);
+            // The active entry is ONE rounded block over its three lines: caps
+            // on the top and bottom rows, the middle row filled edge to edge so
+            // the shape reads as a single tall pill.
+            let fill = |content: String, caps: bool| -> String {
+                let n = theme::width(&content);
+                let padding = " ".repeat(inner.saturating_sub(n));
+                if caps {
                     format!(
-                        "#[fg={s}]\u{e0b6}#[bg={s}]{content}{}#[bg=none,fg={s}]\u{e0b4}",
-                        " ".repeat(inner.saturating_sub(n)),
+                        "#[fg={s}]\u{e0b6}#[bg={s}]{content}{padding}#[bg=none,fg={s}]\u{e0b4}",
                         s = p.surface
                     )
                 } else {
-                    format!(" {content}")
+                    format!("#[bg={s}] {content}{padding} #[bg=none]", s = p.surface)
                 }
             };
-            for l in [l1, l2, l3] {
-                lines.push(theme::render(&pad(&wrap(l))));
+            let rows3 = if t.active {
+                [fill(l1, true), fill(l2, false), fill(l3, true)]
+            } else {
+                [format!(" {l1}"), format!(" {l2}"), format!(" {l3}")]
+            };
+            for l in rows3 {
+                lines.push(theme::render(&pad(&l)));
                 map.push(Row::Tab { pos: t.position });
             }
             for _ in 0..self.row_gap {
