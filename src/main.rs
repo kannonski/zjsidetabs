@@ -949,7 +949,7 @@ impl State {
         if self.role == Role::Dock {
             if let Mouse::LeftClick(line, _) = m {
                 let was_peek = self.peek;
-                if let Some(i) = usize::try_from(line).ok() {
+                if let Ok(i) = usize::try_from(line) {
                     if matches!(
                         self.rows.get(i),
                         Some(Row::Tab { .. } | Row::Pane { .. } | Row::Activity { .. })
