@@ -644,15 +644,11 @@ impl State {
             format!("{txt}{}", " ".repeat(w.saturating_sub(n)))
         };
         if self.show_header {
-            let title = if names {
-                self.header
-                    .clone()
-                    .or_else(|| self.session.clone())
-                    .unwrap_or_default()
-            } else {
-                // build tag: a screenshot then shows which wasm is really running
-                format!("\u{2261} {}", env!("CARGO_PKG_VERSION"))
-            };
+            let title = self
+                .header
+                .clone()
+                .or_else(|| self.session.clone())
+                .unwrap_or_default();
             let title = render::fit(&title, w.saturating_sub(2));
             lines.push(theme::render(&pad(&format!(" #[fg={}]{title}", p.dim))));
             map.push(Row::Header);
