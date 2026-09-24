@@ -1,0 +1,14 @@
+layout {
+    pane split_direction="vertical" {
+        pane size=30 borderless=true {
+            plugin location="file:~/.config/zellij/plugins/zjsidetabs.wasm" {
+                auto_expand "true"
+                auto_rename "true"
+            }
+        }
+        pane
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+}

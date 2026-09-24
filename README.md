@@ -1,0 +1,104 @@
+# zjsidetabs
+
+A vertical, foldable tab rail for [zellij](https://zellij.dev). Tabs on the left, like a browser sidebar — with the things a horizontal tab bar can't do.
+
+```
+   main
+
+  ▾ 1  claude              ●
+      ├  claude ●
+      └  zsh
+  ▸ 2  nvim                  3
+    3  docker
+      ◐ run tests
+```
+
+## What it does
+
+- **Fold / unfold** — each tab is a folder. Expand it to see its panes as a tree; click a pane to focus it. The active tab unfolds itself; fold it back with a right-click, the chevron, or `Space`.
+- **Icons per program** — Nerd Font glyph picked from what runs in the pane (nvim, git, docker, node, cargo, claude, k8s, ssh, …), seeing through `sudo`/`env`/`npx`.
+- **Meaningful titles** — a tab you haven't named shows the program running in it. With `auto_rename`, zellij's `Tab #3` is renamed to that program, and keeps following it until you rename the tab yourself.
+- **Filter / jump** — press `/`, type, `Enter` jumps to the first match. Matches tab names, pane titles and commands.
+- **Activity rows** — live sub-rows under a tab fed over `zellij pipe`, compatible with the [cfal/zellij-vertical-tabs](https://github.com/cfal/zellij-vertical-tabs) payload, so existing Claude Code hooks work unchanged. In-progress items get a spinner.
+- **Badges** — bell, fullscreen, synced input, folded pane count.
+- **Mouse** — click to switch/focus, hover highlight, scroll to move through tabs (or through the list when it overflows).
+- **Keyboard** (when the rail is focused) — `j`/`k` move, `Enter` activate, `l` unfold-or-activate, `h`/`Space` fold, `z` fold/unfold all, `g`/`G` first/last, `/` filter, `Esc` clear.
+
+## Install
+
+Grab `zjsidetabs.wasm` from the [latest release](https://github.com/kannonski/zjsidetabs/releases/latest):
+
+```sh
+mkdir -p ~/.config/zellij/plugins
+curl -L -o ~/.config/zellij/plugins/zjsidetabs.wasm \
+  https://github.com/kannonski/zjsidetabs/releases/latest/download/zjsidetabs.wasm
+```
+
+Or build it — needs Rust and the `wasm32-wasip1` target:
+
+```sh
+rustup target add wasm32-wasip1
+cargo build --release
+cp target/wasm32-wasip1/release/zjsidetabs.wasm ~/.config/zellij/plugins/
+```
+
+## Layout
+
+```kdl
+// ~/.config/zellij/layouts/sidetabs.kdl
+layout {
+    pane split_direction="vertical" {
+        pane size=30 borderless=true {
+            plugin location="file:~/.config/zellij/plugins/zjsidetabs.wasm" {
+                auto_expand "true"
+                auto_rename "true"
+            }
+        }
+        pane
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+}
+```
+
+Then `default_layout "sidetabs"` in `config.kdl`. On first run zellij asks for `ReadApplicationState` and `ChangeApplicationState`; focus the rail and press `y`.
+
+## Options
+
+| Key | Default | Meaning |
+|---|---|---|
+| `auto_expand` | `true` | Unfold the active tab automatically |
+| `auto_rename` | `false` | Rename default-named tabs to their running program |
+| `show_header` | `true` | Session name at the top |
+| `show_tree` | `true` | Show panes under unfolded tabs |
+| `color_accent` | `#cba6f7` | Active index, chevron, focused-pane dot |
+| `color_text` | `#cdd6f4` | Active / hovered label |
+| `color_subtext` | `#a6adc8` | Inactive label |
+| `color_muted` | `#6c7086` | Icons, activity text |
+| `color_dim` | `#585b70` | Inactive index, tree lines, counts |
+| `color_surface` | `#313244` | Active pill background |
+| `color_surface_hi` | `#45475a` | Hover background |
+| `color_warn` | `#fab387` | Bell badge |
+| `color_ok` | `#a6e3a1` | Sync badge |
+
+Colours take `#rrggbb`, `#rgb` or a 0–255 palette index. Defaults are Catppuccin Mocha.
+
+## Feeding activity
+
+```sh
+zellij pipe --name activity -- '{
+  "zsession": "main",
+  "name": "claude",
+  "todos": [
+    { "status": "in_progress", "text": "run tests" },
+    { "status": "pending",     "text": "write migration" }
+  ]
+}'
+```
+
+Rows attach to the tab whose name — or focused pane's program — equals `name`. Sub-agents (`"subagents": { "id": { "icon", "glyph", "title" } }`) take priority over todos; done todos are hidden. Send an empty payload to clear.
+
+## License
+
+MIT
